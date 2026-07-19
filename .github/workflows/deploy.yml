@@ -5,7 +5,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main", "master", "claude/hospital-performance-dashboard-e6vibs"]
   workflow_dispatch:
 
 permissions:
@@ -30,6 +30,9 @@ jobs:
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
+        with:
+          # Turn on GitHub Pages automatically if it isn't enabled yet.
+          enablement: true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
