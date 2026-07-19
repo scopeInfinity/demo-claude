@@ -6,12 +6,25 @@
 const Store = (() => {
   const KEY = "hospitalDashboard.v1";
 
+  // Safe storage: real localStorage when available, else an in-memory
+  // fallback. Some browsers block localStorage on file:// pages, so this
+  // keeps the app working even when opened by double-clicking the file.
+  const _mem = {};
+  const _ls = {
+    getItem(k) {
+      try { return localStorage.getItem(k); } catch (e) { return k in _mem ? _mem[k] : null; }
+    },
+    setItem(k, v) {
+      try { localStorage.setItem(k, v); } catch (e) { _mem[k] = v; }
+    },
+  };
+
   function _clone(obj) {
     return JSON.parse(JSON.stringify(obj));
   }
 
   function load() {
-    const raw = localStorage.getItem(KEY);
+    const raw = _ls.getItem(KEY);
     if (!raw) {
       const seeded = _clone(SEED_DATA);
       save(seeded);
@@ -28,7 +41,7 @@ const Store = (() => {
   }
 
   function save(data) {
-    localStorage.setItem(KEY, JSON.stringify(data));
+    _ls.setItem(KEY, JSON.stringify(data));
   }
 
   function reset() {

@@ -50,39 +50,54 @@ and privacy-safe. Thresholds live in
 All data is stored in `localStorage` under `hospitalDashboard.v1`. Clearing your
 browser data clears it — use **Export** to keep a copy.
 
-## Running locally
+## Running it — just open the file
 
-It's plain static files. Just open `index.html`, or serve the folder:
+`index.html` is a **single, fully self-contained file** — all CSS, JavaScript,
+and Chart.js are inlined, so it makes **zero external requests**. To use it:
 
-```bash
-python3 -m http.server 8000
-# then visit http://localhost:8000
-```
+- **Double-click `index.html`** — it opens in your browser and works offline. No
+  server, no install, nothing to configure.
+- Or serve the folder if you prefer: `python3 -m http.server 8000` →
+  `http://localhost:8000`.
 
-## Deployment — GitHub Pages
+## Deployment
 
-This repo is deployed with **GitHub Pages** (chosen over Firebase because the
-app is fully static — Pages is free and needs zero backend setup).
+Because it's one static file, you can host it almost anywhere:
 
-A workflow at [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
-publishes the site automatically on every push to the default branch.
-
-**One-time setup** (once this branch is merged to the default branch):
+**GitHub Pages (simplest — "Deploy from a branch", no workflow):**
 
 1. Go to **Settings → Pages**.
-2. Under **Build and deployment → Source**, choose **GitHub Actions**.
-3. Push to the default branch (or re-run the workflow). The site goes live at
+2. Under **Build and deployment → Source**, choose **Deploy from a branch**.
+3. Branch: **`main`**, folder: **`/ (root)`** → **Save**.
+4. Wait ~1 minute; the site goes live at
    `https://<your-username>.github.io/<repo>/`.
+
+**Anywhere else:** drag `index.html` onto Netlify Drop, Cloudflare Pages,
+Vercel, or any static host / intranet file share. It's one file.
+
+## Editing the code (optional)
+
+`index.html` is **generated** from the readable source in `assets/` by a small
+bundler. If you change any logic or styling, edit the files under `assets/` and
+rebuild:
+
+```bash
+node build.js   # regenerates the self-contained index.html
+```
+
+(Editing *data* — clinicians, departments, metrics — is done in the browser UI,
+not in these files.)
 
 ## Tech
 
-Vanilla HTML/CSS/JS + [Chart.js](https://www.chartjs.org/) (via CDN). No build
-step, no framework, no dependencies to install.
+Vanilla HTML/CSS/JS + [Chart.js](https://www.chartjs.org/) (vendored locally, no
+CDN). No framework, no runtime dependencies.
 
 ## Project layout
 
 ```
-index.html              # shell + script/style includes
+index.html              # generated, self-contained, deployable app (build.js output)
+build.js                # bundles assets/ into index.html
 assets/css/style.css    # theming (light/dark) and layout
 assets/js/seed.js       # demo dataset
 assets/js/store.js      # localStorage persistence
@@ -90,4 +105,5 @@ assets/js/metrics.js    # scoring engine
 assets/js/insights.js   # automated findings
 assets/js/charts.js     # Chart.js wrappers
 assets/js/app.js        # UI controller / routing / editor
+assets/js/chart.umd.min.js  # vendored Chart.js
 ```

@@ -357,7 +357,7 @@
   function toggleTheme() {
     const cur = document.body.getAttribute("data-theme") === "dark" ? "light" : "dark";
     document.body.setAttribute("data-theme", cur);
-    localStorage.setItem("hospitalDashboard.theme", cur);
+    try { localStorage.setItem("hospitalDashboard.theme", cur); } catch (e) {}
     render(); // re-draw charts with new colors
   }
 
@@ -389,7 +389,8 @@
   }
 
   // Restore theme
-  const savedTheme = localStorage.getItem("hospitalDashboard.theme");
+  let savedTheme = null;
+  try { savedTheme = localStorage.getItem("hospitalDashboard.theme"); } catch (e) {}
   if (savedTheme) document.body.setAttribute("data-theme", savedTheme);
 
   bindGlobalControls();
