@@ -1,0 +1,31 @@
+  <header class="topbar">
+    <div class="brand">
+      <a class="home-link" href="../../index.html" title="All projects">←</a>
+      <span class="logo">🏥</span>
+      <div>
+        <h1 id="hospitalName">Hospital</h1>
+        <div class="sub">Performance dashboard · <span id="period">—</span></div>
+      </div>
+    </div>
+    <div class="toolbar">
+      <button class="btn" id="btnAdd">+ Clinician</button>
+      <button class="btn" id="btnImport">Import</button>
+      <button class="btn" id="btnExport">Export</button>
+      <button class="btn" id="btnReset">Reset demo</button>
+      <button class="btn icon-only" id="btnTheme" title="Toggle theme">◐</button>
+      <input type="file" id="importFile" accept="application/json" hidden />
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="side-label">Views</div>
+      <nav id="deptNav"></nav>
+      <div class="side-note">
+        Data is fake demo data, saved only in <strong>this browser</strong>
+        (localStorage). Edit freely — use Export to keep a copy, Import to load one.
+      </div>
+    </aside>
+
+    <main id="main" class="content"><!-- rendered by app.js --></main>
+  </div>

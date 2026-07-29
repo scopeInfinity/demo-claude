@@ -1,84 +1,115 @@
 /*
- * build.js — Bundles the modular source in assets/ into a single, fully
- * self-contained index.html (inline CSS + JS + Chart.js, zero external
- * requests). Run: `node build.js`
+ * build.js — Multi-project static builder.
  *
- * Why: the app then works by simply opening index.html (double-click, any
- * static host, or GitHub Pages "Deploy from a branch") with no build server
- * and no CDN. assets/ stays the readable source of truth; index.html is the
- * generated, deployable artifact — edit assets/, then re-run this script.
+ * This repo hosts several small, self-contained web tools. Each one is bundled
+ * into a single deployable index.html (inline CSS + JS + any vendored library,
+ * zero external requests) so it works by simply opening the file, on any static
+ * host, or via GitHub Pages "Deploy from a branch". The readable source lives
+ * under src/<project>/; the generated index.html files are the artifacts.
+ *
+ *   src/home/       -> index.html                    (the landing hub)
+ *   src/hospital/   -> projects/hospital/index.html  (Hospital dashboard)
+ *   src/jb4/        -> projects/jb4/index.html        (JB4 dyno & log analyzer)
+ *
+ * Run: `node build.js`  (regenerates every index.html)
  */
 const fs = require("fs");
 const path = require("path");
 
 const read = (p) => fs.readFileSync(path.join(__dirname, p), "utf8");
+const emojiFavicon = (e) =>
+  `data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>${e}</text></svg>`;
 
-const css = read("assets/css/style.css");
-const jsFiles = [
-  "assets/js/chart.umd.min.js", // Chart.js first (defines window.Chart)
-  "assets/js/seed.js",
-  "assets/js/store.js",
-  "assets/js/metrics.js",
-  "assets/js/insights.js",
-  "assets/js/charts.js",
-  "assets/js/app.js",
+// A project = some CSS files, some JS files (concatenated in order), a body
+// HTML fragment, and page metadata. Everything is inlined into one file.
+const PROJECTS = [
+  {
+    id: "home",
+    out: "index.html",
+    lang: "en",
+    title: "Projects · demo-claude",
+    description: "A small hub of self-contained, no-backend web tools.",
+    favicon: "🧰",
+    css: ["src/home/style.css"],
+    js: [],
+    body: "src/home/body.html",
+  },
+  {
+    id: "hospital",
+    out: "projects/hospital/index.html",
+    lang: "en",
+    title: "Hospital Performance Dashboard",
+    description:
+      "Department & clinician performance analytics for a hospital — demo with editable, locally-saved data. Single self-contained file.",
+    favicon: "🏥",
+    css: ["src/hospital/css/style.css"],
+    js: [
+      "src/hospital/js/chart.umd.min.js", // Chart.js first (defines window.Chart)
+      "src/hospital/js/seed.js",
+      "src/hospital/js/store.js",
+      "src/hospital/js/metrics.js",
+      "src/hospital/js/insights.js",
+      "src/hospital/js/charts.js",
+      "src/hospital/js/app.js",
+    ],
+    body: "src/hospital/body.html",
+  },
+  {
+    id: "jb4",
+    out: "projects/jb4/index.html",
+    lang: "en",
+    title: "JB4 Dyno & Log Analyzer",
+    description:
+      "Upload a raw JB4 datalog and see engine vs wheel horsepower & torque, boost/timing/AFR health, wheel-spin detection, JB4 map comparison, and plain-English tuning recommendations. Optional RaceBox GPS track. Fully client-side, single self-contained file.",
+    favicon: "🏎️",
+    css: ["src/jb4/css/style.css"],
+    js: [
+      "src/jb4/js/chart.umd.min.js", // Chart.js first (defines window.Chart)
+      "src/jb4/js/carspecs.js",
+      "src/jb4/js/sample.js",
+      "src/jb4/js/parse.js",
+      "src/jb4/js/dyno.js",
+      "src/jb4/js/analyze.js",
+      "src/jb4/js/charts.js",
+      "src/jb4/js/app.js",
+    ],
+    body: "src/jb4/body.html",
+  },
 ];
-const js = jsFiles.map((f) => `/* ===== ${f} ===== */\n${read(f)}`).join("\n\n");
 
-const favicon =
-  "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏥</text></svg>";
+function buildProject(p) {
+  const css = p.css.map(read).join("\n\n");
+  const js = p.js.map((f) => `/* ===== ${f} ===== */\n${read(f)}`).join("\n\n");
+  const body = read(p.body);
 
-const html = `<!DOCTYPE html>
-<html lang="en">
+  const html = `<!DOCTYPE html>
+<html lang="${p.lang}">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hospital Performance Dashboard</title>
-  <meta name="description" content="Department & clinician performance analytics for a hospital — demo with editable, locally-saved data. Single self-contained file." />
-  <link rel="icon" href="${favicon}" />
+  <title>${p.title}</title>
+  <meta name="description" content="${p.description.replace(/"/g, "&quot;")}" />
+  <link rel="icon" href="${emojiFavicon(p.favicon)}" />
   <style>
 ${css}
   </style>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="logo">🏥</span>
-      <div>
-        <h1 id="hospitalName">Hospital</h1>
-        <div class="sub">Performance dashboard · <span id="period">—</span></div>
-      </div>
-    </div>
-    <div class="toolbar">
-      <button class="btn" id="btnAdd">+ Clinician</button>
-      <button class="btn" id="btnImport">Import</button>
-      <button class="btn" id="btnExport">Export</button>
-      <button class="btn" id="btnReset">Reset demo</button>
-      <button class="btn icon-only" id="btnTheme" title="Toggle theme">◐</button>
-      <input type="file" id="importFile" accept="application/json" hidden />
-    </div>
-  </header>
-
-  <div class="layout">
-    <aside class="sidebar">
-      <div class="side-label">Views</div>
-      <nav id="deptNav"></nav>
-      <div class="side-note">
-        Data is fake demo data, saved only in <strong>this browser</strong>
-        (localStorage). Edit freely — use Export to keep a copy, Import to load one.
-      </div>
-    </aside>
-
-    <main id="main" class="content"><!-- rendered by app.js --></main>
-  </div>
-
+${body}${js ? `
   <script>
 ${js}
-  </script>
+  </script>` : ""}
 </body>
 </html>
 `;
 
-fs.writeFileSync(path.join(__dirname, "index.html"), html);
-const kb = (Buffer.byteLength(html) / 1024).toFixed(0);
-console.log(`Built index.html (${kb} KB, self-contained, ${jsFiles.length} scripts + css inlined).`);
+  const outAbs = path.join(__dirname, p.out);
+  fs.mkdirSync(path.dirname(outAbs), { recursive: true });
+  fs.writeFileSync(outAbs, html);
+  const kb = (Buffer.byteLength(html) / 1024).toFixed(0);
+  console.log(`  ${p.out.padEnd(30)} ${kb.padStart(5)} KB  (${p.js.length} scripts + ${p.css.length} css inlined)`);
+}
+
+console.log("Building self-contained projects:");
+PROJECTS.forEach(buildProject);
+console.log("Done.");
