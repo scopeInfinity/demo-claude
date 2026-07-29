@@ -4,12 +4,18 @@ A hub of small, **self-contained** web apps. Each one is a single static
 `index.html` (all CSS, JS, and any library inlined — zero external requests)
 that runs entirely in your browser and keeps your data on your device.
 
-Open **`index.html`** for the landing hub, which links to each project.
+### 🌐 Live site
 
-| Project | What it is |
-|---------|------------|
-| [🏎️ JB4 Dyno & Log Analyzer](projects/jb4/) | Turn a raw JB4 datalog into engine-vs-wheel HP & torque, traction analysis, and plain-English tuning tips. |
-| [🏥 Hospital Performance Dashboard](projects/hospital/) | Department & clinician performance analytics with a transparent scoring model and automated insights. |
+**→ https://scopeinfinity.github.io/demo-claude/**
+
+| Project | Live link | What it is |
+|---------|-----------|------------|
+| 🏎️ JB4 Dyno & Log Analyzer | [Open](https://scopeinfinity.github.io/demo-claude/projects/jb4/) · [source](projects/jb4/) | Turn a raw JB4 datalog into engine-vs-wheel HP & torque, traction analysis, and plain-English tuning tips. |
+| 🏥 Hospital Performance Dashboard | [Open](https://scopeinfinity.github.io/demo-claude/projects/hospital/) · [source](projects/hospital/) | Department & clinician performance analytics with a transparent scoring model and automated insights. |
+
+> The site is published by GitHub Pages from the `main` branch (see
+> `.github/workflows/static.yml`). If the links 404, enable Pages under
+> **Settings → Pages → Build and deployment → Source: GitHub Actions**.
 
 ---
 
