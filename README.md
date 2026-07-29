@@ -1,109 +1,162 @@
-# 🏥 Hospital Performance Dashboard
+# demo-claude — little tools, no backend
 
-A lightweight, **no-backend** web dashboard for tracking the performance of
-departments and clinicians in a hospital. Built for a radiology-focused
-institute, but the model is general enough for any specialty.
+A hub of small, **self-contained** web apps. Each one is a single static
+`index.html` (all CSS, JS, and any library inlined — zero external requests)
+that runs entirely in your browser and keeps your data on your device.
 
-It ships with realistic **demo data** and is fully **editable in the browser** —
-add, edit, and delete clinicians and departments, and everything is saved in
-your browser's `localStorage`. No server, no accounts, no database.
+Open **`index.html`** for the landing hub, which links to each project.
 
-## What it measures
+| Project | What it is |
+|---------|------------|
+| [🏎️ JB4 Dyno & Log Analyzer](projects/jb4/) | Turn a raw JB4 datalog into engine-vs-wheel HP & torque, traction analysis, and plain-English tuning tips. |
+| [🏥 Hospital Performance Dashboard](projects/hospital/) | Department & clinician performance analytics with a transparent scoring model and automated insights. |
 
-Per clinician (over a rolling period, e.g. a quarter):
+---
 
-| Area | Metric |
-|------|--------|
-| **Case acceptance** | cases accepted ÷ cases referred |
-| **Surgery volume** | minor vs. major procedures |
-| **Surgery outcomes** | success vs. failure → success rate |
-| **Radiology** | scans reported, avg report turnaround (hrs) |
-| **Experience** | patient satisfaction (1–5) |
+## 🏎️ JB4 Dyno & Log Analyzer
 
-From these it computes a transparent **Performance Score (0–100)** — a weighted
-blend of acceptance, surgical success, workload/volume, turnaround, and
-satisfaction. Weights auto-adjust when a component doesn't apply (e.g. a pure
-radiologist with few surgeries). The formula lives in
-[`assets/js/metrics.js`](assets/js/metrics.js) and is meant to be tuned to your
-hospital's standards.
+The JB4 Mobile app's own graphs are hard to read. This takes the **raw CSV**
+you export from it and answers the questions that matter: *am I actually making
+more power on a higher map, and am I just spinning the tyres?*
 
-## Automated insights (the "AI analyst")
+### What it does
 
-The **Automated insights** panel reads the numbers and writes plain-English
-findings — top performers, who needs attention, and department gaps — so a lead
-doesn't have to evaluate everyone by hand. It's a **rules-based engine** that
-runs entirely on-device (no data leaves the browser), which keeps it auditable
-and privacy-safe. Thresholds live in
-[`assets/js/insights.js`](assets/js/insights.js).
+- **Engine vs wheel horsepower & torque** — a "virtual dyno" (see the method
+  below). Wheel figure from physics; crank figure by adding back drivetrain loss.
+- **Splits a log into pulls automatically.** JB4 logs are one long file; a
+  session can hold several wide-open runs with idle/rolling gaps between them.
+  The tool finds the breaks in the timeline ("disconnected time zones") and each
+  wide-open-throttle pull gets its own clean set of graphs.
+- **Wheel-spin detection.** It compares how fast the wheels *should* be turning
+  (from RPM + gear) against how fast you *actually* moved (speed channel / GPS).
+  The gap is slip — power going to smoke, not speed — and it tells you where to
+  back off boost or modulate throttle.
+- **Health checks + recommendations:** boost vs the JB4's own target (leaks /
+  overboost), ignition timing being pulled (possible knock), lean AFR at WOT,
+  and intake-air heat soak. All rules-based and on-device.
+- **Map-vs-map comparison.** Load one log per JB4 map, label each, and it
+  overlays the curves and tables the gains — flagging where extra "power" is
+  really just wheelspin.
+- **RaceBox GPS (optional).** Attach a RaceBox CSV to see your run drawn on a
+  track map coloured by speed. The tool works fully **without** RaceBox; GPS just
+  adds the map (and a second speed source).
 
-> Want a true LLM narrative instead? The same `scored` dataset can be handed to
-> an API-backed summarizer later — the structure is already there.
+Pick your car from the **Car specs** presets (BMW 330i 2023, RWD or xDrive, on
+Michelin Pilot Sport 4S, is built in) — no need to enter your own car. Only the
+parameters that actually affect a horsepower/traction estimate are exposed, and
+all are editable so you can calibrate against a real dyno pull.
 
-## Editing & data
+Click **Load sample log** to see it work immediately with a realistic synthetic
+JB4 file (two pulls, one with a deliberate patch of wheel spin).
 
-- **+ Clinician** / **Edit** / **Del** — manage staff and their metrics.
-- **New department** — type a name in the editor to create one on the fly.
-- **Export** — download your data as JSON (your backup).
-- **Import** — load a previously exported JSON file.
-- **Reset demo** — restore the original demo dataset.
+### Understanding the raw JB4 data format
 
-All data is stored in `localStorage` under `hospitalDashboard.v1`. Clearing your
-browser data clears it — use **Export** to keep a copy.
+JB4 datalogs are plain **CSV**. Real-world quirks the parser handles:
 
-## Running it — just open the file
+- The file usually starts with a **title/notes line** (e.g. `JB4 Android A056…`)
+  before the actual column-header row — so the header is detected, not assumed.
+- **Column names and order vary** by firmware/app version and platform. Columns
+  are mapped to canonical fields by fuzzy-matching their names (case-insensitive),
+  so a missing or renamed channel degrades gracefully instead of breaking.
+- The **`Timestamp` column is in tenths of a second** (a value of `10` = 1.0 s).
+  The tool infers the real unit from the spacing between rows so a 10 Hz log
+  (timestamp stepping by 1) isn't mistaken for one-second samples.
 
-`index.html` is a **single, fully self-contained file** — all CSS, JavaScript,
-and Chart.js are inlined, so it makes **zero external requests**. To use it:
+Common JB4 channels it reads: `Timestamp, RPM, ECU_PSI, Target, Boost, Pedal,
+Throttle, IAT, AVG_IGN, CALC_TORQUE, AFR/AFR2, Gear, MPH, Load, E85, fuel
+pressure, coolant/oil temp`. Yes — JB4 logs **do** have a timestamp, which is
+what makes pull-splitting reliable.
 
-- **Double-click `index.html`** — it opens in your browser and works offline. No
-  server, no install, nothing to configure.
-- Or serve the folder if you prefer: `python3 -m http.server 8000` →
-  `http://localhost:8000`.
+> Sources for the format & method: [BMW N54 data-logging guide](https://bmwtuning.co/bmw-n54-data-logging-with-jb4/),
+> JB4 logging-parameter references, and the "Log Dyno / Virtual Dyno"
+> [approach to HP from a datalog](https://www.jb4tech.com/forum/general/market-place-for-sale-trade-wanted/25324-).
 
-## Deployment
+### How the horsepower number is worked out (the method)
 
-Because it's one static file, you can host it almost anywhere:
+A chassis dyno measures torque at a roller. From a datalog you instead use
+physics: the engine accelerates a **known mass** and overcomes **aero + rolling
+drag**. For each moment in a pull:
 
-**GitHub Pages (simplest — "Deploy from a branch", no workflow):**
-
-1. Go to **Settings → Pages**.
-2. Under **Build and deployment → Source**, choose **Deploy from a branch**.
-3. Branch: **`main`**, folder: **`/ (root)`** → **Save**.
-4. Wait ~1 minute; the site goes live at
-   `https://<your-username>.github.io/<repo>/`.
-
-**Anywhere else:** drag `index.html` onto Netlify Drop, Cloudflare Pages,
-Vercel, or any static host / intranet file share. It's one file.
-
-## Editing the code (optional)
-
-`index.html` is **generated** from the readable source in `assets/` by a small
-bundler. If you change any logic or styling, edit the files under `assets/` and
-rebuild:
-
-```bash
-node build.js   # regenerates the self-contained index.html
+```
+speed v   = RPM · (tyre rolling circ) / (gear · final drive)   [smooth, from RPM]
+accel a   = dv/dt
+F_total   = m_eff·a  +  ½·ρ·Cd·A·v²  +  Crr·m·g
+P_wheel   = F_total · v
+P_engine  = P_wheel / (1 − drivetrain_loss)
+Torque    = HP · 5252 / RPM
 ```
 
-(Editing *data* — clinicians, departments, metrics — is done in the browser UI,
-not in these files.)
+Points are binned by RPM and smoothed into the dyno curve. When the log has a
+measured speed channel, the tool auto-calibrates the RPM→speed factor from it
+(removing tyre/gear guesswork) **and** uses the RPM-vs-measured gap for slip.
+
+**These are estimates** — a virtual dyno typically reads a few percent off a
+chassis dyno. Calibrate the car specs (weight, drivetrain loss) against a known
+pull to tighten it up.
+
+### Which car-spec numbers matter, and why
+
+| Field | Feeds |
+|-------|-------|
+| Curb weight + driver/fuel | the `m·a` inertial force (the dominant term) |
+| Drivetrain loss | converting wheel HP ↔ crank HP |
+| Rotating-mass factor | wheels/drivetrain inertia on the inertial term |
+| Tyre rolling circumference | RPM ↔ road speed, and the slip cross-check |
+| Gear ratios + final drive | RPM ↔ road speed when there's no speed channel |
+| Cd, frontal area, air density | the aerodynamic drag term |
+| Rolling resistance (Crr) | the rolling-drag term |
+
+---
+
+## 🏥 Hospital Performance Dashboard
+
+Department & clinician performance analytics for a hospital, with a transparent
+**Performance Score (0–100)** blended from case acceptance, surgical success,
+workload/volume, report turnaround, and patient satisfaction. An **automated,
+rules-based insights** panel writes plain-English findings (top performers, who
+needs attention, department gaps). Ships with editable demo data saved in your
+browser's `localStorage` — add/edit/delete clinicians and departments, and
+export/import JSON backups. Nothing leaves the browser.
+
+Scoring weights live in `src/hospital/js/metrics.js`; insight thresholds in
+`src/hospital/js/insights.js`.
+
+---
+
+## Project layout & building
+
+Each project's readable source lives under `src/<project>/`; the deployable
+`index.html` files are **generated** from it.
+
+```
+index.html                     # generated landing hub  (from src/home/)
+projects/hospital/index.html   # generated              (from src/hospital/)
+projects/jb4/index.html        # generated              (from src/jb4/)
+build.js                       # bundles src/ -> the index.html files
+src/
+  home/       body.html, style.css
+  hospital/   body.html, css/, js/          (scoring, insights, charts, store, app)
+  jb4/        body.html, css/, js/          (carspecs, parse, dyno, analyze, charts, app, sample)
+```
+
+Edit the files under `src/`, then rebuild:
+
+```bash
+node build.js      # regenerates every self-contained index.html
+```
+
+## Running & deploying
+
+Open any generated `index.html` directly (double-click), or serve the folder:
+
+```bash
+python3 -m http.server 8000     # then visit http://localhost:8000
+```
+
+Because everything is static, host it anywhere — **GitHub Pages** ("Deploy from
+a branch", root folder), Netlify, Cloudflare Pages, Vercel, or an intranet share.
 
 ## Tech
 
 Vanilla HTML/CSS/JS + [Chart.js](https://www.chartjs.org/) (vendored locally, no
-CDN). No framework, no runtime dependencies.
-
-## Project layout
-
-```
-index.html              # generated, self-contained, deployable app (build.js output)
-build.js                # bundles assets/ into index.html
-assets/css/style.css    # theming (light/dark) and layout
-assets/js/seed.js       # demo dataset
-assets/js/store.js      # localStorage persistence
-assets/js/metrics.js    # scoring engine
-assets/js/insights.js   # automated findings
-assets/js/charts.js     # Chart.js wrappers
-assets/js/app.js        # UI controller / routing / editor
-assets/js/chart.umd.min.js  # vendored Chart.js
-```
+CDN). No framework, no runtime dependencies, no server.

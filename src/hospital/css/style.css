@@ -43,6 +43,8 @@ body {
   position: sticky; top: 0; z-index: 20;
 }
 .brand { display: flex; align-items: center; gap: 12px; }
+.home-link { text-decoration: none; color: var(--fg-soft); font-size: 20px; line-height: 1; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); }
+.home-link:hover { color: var(--primary); border-color: var(--primary); }
 .logo { font-size: 28px; }
 .topbar h1 { font-size: 18px; margin: 0; }
 .topbar .sub { color: var(--fg-soft); font-size: 12px; }
