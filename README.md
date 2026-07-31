@@ -33,6 +33,17 @@ more power on a higher map, and am I just spinning the tyres?*
   session can hold several wide-open runs with idle/rolling gaps between them.
   The tool finds the breaks in the timeline ("disconnected time zones") and each
   wide-open-throttle pull gets its own clean set of graphs.
+- **Reads pedal, not just throttle plate.** On a boosted car the DME holds the
+  throttle *plate* part-open (30–55%) while your foot is flat on the floor, so
+  plate angle makes a real wide-open pull look like part throttle. Pedal
+  position — driver demand — is used when the log has it.
+- **Only dynos things that are actually pulls.** Each pull is cut at gear
+  changes (a shift drops the revs while the car keeps accelerating), and climbs
+  where the revs flare without the car speeding up — kickdowns, converter or
+  clutch slip — are rejected rather than scored as enormous power.
+- **Session timeline.** The whole log against time with each pull picked out,
+  so you can see intake temps, boost and timing across the session rather than
+  only within one pull. Splits by JB4 map when the log records one.
 - **Works on part-throttle logs too.** Not every log has a proper wide-open run.
   If there's no WOT pull, the detector relaxes its gates (part-throttle, then
   any sustained RPM climb) and analyses the best pull it can find, clearly
@@ -75,9 +86,13 @@ JB4 datalogs are plain **CSV**. Real-world quirks the parser handles:
   (timestamp stepping by 1) isn't mistaken for one-second samples.
 
 Common JB4 channels it reads: `Timestamp, RPM, ECU_PSI, Target, Boost, Pedal,
-Throttle, IAT, AVG_IGN, CALC_TORQUE, AFR/AFR2, Gear, MPH, Load, E85, fuel
+Throttle, IAT, AVG_IGN, CALC_TORQUE, AFR/AFR2, Gear, Map, MPH, Load, E85, fuel
 pressure, coolant/oil temp`. Yes — JB4 logs **do** have a timestamp, which is
 what makes pull-splitting reliable.
+
+> `Map` is matched **exactly**, because in engine logs "MAP" usually means
+> Manifold Absolute Pressure — a loose pattern would swallow `MAF`/`TMAP`
+> columns and corrupt the boost charts.
 
 > Sources for the format & method: [BMW N54 data-logging guide](https://bmwtuning.co/bmw-n54-data-logging-with-jb4/),
 > JB4 logging-parameter references, and the "Log Dyno / Virtual Dyno"

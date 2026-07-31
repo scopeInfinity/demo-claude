@@ -56,6 +56,10 @@ const JB4Parse = (() => {
     ["afr2", /(afr ?2|afr_2|lambda ?2|afr ?b2)/i],
     ["afr", /(^afr$|afr ?1|air ?fuel|lambda)/i],
     ["gear", /(^gear$|gear ?pos)/i],
+    // The JB4 map number the car was running. Matched exactly: in engine logs
+    // "MAP" more often means Manifold Absolute Pressure, and a loose pattern
+    // would also swallow MAF/TMAP columns and corrupt the boost charts.
+    ["jb4Map", /^map$/i],
     ["mph", /(^mph$|^speed$|vehicle ?speed|veh ?spd)/i],
     ["kph", /(^kph|km ?\/?h|kmh)/i],
     ["load", /(^load$|engine ?load|air ?mass)/i],
@@ -151,7 +155,7 @@ const JB4Parse = (() => {
       fields: {},
     };
     const FIELDS = ["rpm", "boost", "boostTarget", "ecuPsi", "pedal", "throttle", "iat",
-      "avgIgn", "ignMin", "calcTorque", "afr", "afr2", "gear", "mph", "kph", "load", "e85", "fuelPsi", "waterC", "oilC"];
+      "avgIgn", "ignMin", "calcTorque", "afr", "afr2", "gear", "jb4Map", "mph", "kph", "load", "e85", "fuelPsi", "waterC", "oilC"];
     FIELDS.forEach((f) => {
       if (map[f] != null) rec.fields[f] = dataRows.map((r) => col(r, f));
     });
@@ -223,15 +227,86 @@ const JB4Parse = (() => {
     return m === -Infinity ? NaN : m;
   }
 
+  // Which channel means "the driver asked for everything"?
+  //
+  // Pedal position is the honest answer: on a boosted car the DME deliberately
+  // holds the throttle *plate* part-open during a pull — the turbo is doing the
+  // work, so the plate sits at 30-55% while the pedal is flat on the floor.
+  // Reading plate angle makes a genuine wide-open pull look like part throttle
+  // and it never gets detected. So prefer pedal, and fall back to plate angle
+  // only when there's no pedal channel or it never rises enough to be usable.
+  //
+  // Also normalises a 0-1 scaled channel to 0-100 so the percentage gates and
+  // the figures shown to the user mean the same thing on every firmware.
+  function wotChannel(rec) {
+    const pedal = rec.fields.pedal, throttle = rec.fields.throttle;
+    const norm = (a, name) => {
+      const mx = maxOver(a);
+      if (!Number.isFinite(mx)) return null;
+      // A channel topping out at ~1 is a fraction, not a percentage.
+      return { series: mx <= 1.5 ? a.map((v) => v * 100) : a, name, max: mx <= 1.5 ? mx * 100 : mx };
+    };
+    const p = pedal ? norm(pedal, "pedal") : null;
+    const th = throttle ? norm(throttle, "throttle") : null;
+    if (p && (!th || p.max >= 50 || p.max >= th.max)) return p;
+    if (th) return th;
+    return { series: null, name: null, max: NaN };
+  }
+
+  // Contiguous runs of the same JB4 map, so a session that switched maps
+  // mid-log can be split and compared without needing one file per map.
+  function mapRuns(rec) {
+    const m = rec.fields.jb4Map;
+    if (!m) return [];
+    const runs = [];
+    let start = 0;
+    for (let i = 1; i <= m.length; i++) {
+      const ended = i === m.length || (Number.isFinite(m[i]) && m[i] !== m[start]);
+      if (!ended) continue;
+      if (i - start >= 3 && Number.isFinite(m[start])) {
+        runs.push({ map: m[start], start, end: i, tStart: rec.t[start], tEnd: rec.t[i - 1] });
+      }
+      start = i;
+    }
+    return runs;
+  }
+
   function scanPulls(rec, seg, tier) {
     const { start, end } = seg;
     const rpm = rec.fields.rpm;
-    const ch = rec.fields.throttle || rec.fields.pedal;
+    const wc = wotChannel(rec);
+    const ch = wc.series;
     const t = rec.t;
+    const jb4Map = rec.fields.jb4Map;
     // No throttle channel (or the tier ignores it) => every sample counts as
     // "on it" and RPM climb alone decides what's a pull.
     const gated = !!ch && tier.wot > 0;
     const pulls = [];
+
+    // A dyno pull has to be a single gear. Across a shift the RPM drops while
+    // the car keeps accelerating, so both the rpm→speed factor and dv/dt become
+    // meaningless and the resulting "horsepower" is nonsense. Where the log has
+    // a gear channel, end the pull at the shift and let the next gear start a
+    // fresh one.
+    const gear = rec.fields.gear;
+    const gearAt = (k) => (gear && Number.isFinite(gear[k]) && gear[k] > 0 ? Math.round(gear[k]) : null);
+
+    // Within one gear the car's speed rises in step with the revs. When it
+    // doesn't, the revs are climbing for some reason other than the car
+    // accelerating — a kickdown flares the engine 80% while road speed gains
+    // 13%, and a converter/clutch slip does the same. The dyno reads speed from
+    // RPM, so it would score that flare as enormous acceleration (we measured
+    // 880 whp / 2083 lb-ft from one downshift). Require the measured speed to
+    // roughly track the revs before treating a climb as a real pull.
+    const mph = rec.fields.mph;
+    function speedTracksRpm(from, to) {
+      if (!mph) return true; // nothing to cross-check against
+      const v0 = mph[from], v1 = mph[to];
+      if (!Number.isFinite(v0) || !Number.isFinite(v1) || v0 < 5) return true; // standing start
+      const rpmRatio = rpm[to] / rpm[from];
+      if (!(rpmRatio > 1.05)) return true;
+      return v1 / v0 >= 0.7 * rpmRatio; // allow for wheelspin, reject a flare
+    }
 
     let i = start;
     while (i < end) {
@@ -239,9 +314,12 @@ const JB4Parse = (() => {
       if (!onIt) { i++; continue; }
       let j = i;
       let lastRise = i;
+      const g0 = gearAt(i);
       while (j + 1 < end) {
         const stillOn = gated ? ch[j + 1] >= tier.wot - tier.hyst : true;
         const rising = rpm[j + 1] >= rpm[lastRise] - 250; // allow small dips
+        const g1 = gearAt(j + 1);
+        if (g0 != null && g1 != null && g1 !== g0) break; // shifted — pull ends here
         if (!stillOn) break;
         if (rpm[j + 1] > rpm[lastRise]) lastRise = j + 1;
         if (!rising && rpm[j + 1] < rpm[lastRise] - 400) break; // clearly done climbing
@@ -249,10 +327,12 @@ const JB4Parse = (() => {
       }
       const rise = rpm[lastRise] - rpm[i];
       const secs = t[j] - t[i];
-      if (rise >= tier.minRise && secs >= tier.minSecs) {
+      if (rise >= tier.minRise && secs >= tier.minSecs && speedTracksRpm(i, lastRise)) {
         const stop = Math.min(j + 1, end);
         pulls.push({ start: i, end: stop, rpmStart: rpm[i], rpmEnd: rpm[lastRise], secs,
-          kind: tier.kind, avgThrottle: ch ? avgOver(ch, i, stop) : NaN });
+          kind: tier.kind, avgThrottle: ch ? avgOver(ch, i, stop) : NaN, wotChannel: wc.name,
+          map: jb4Map ? Math.round(avgOver(jb4Map, i, stop)) : null, gear: g0,
+          tStart: t[i], tEnd: t[stop - 1] });
         i = j + 1;
       } else {
         i = j > i ? j + 1 : i + 1;
@@ -286,8 +366,9 @@ const JB4Parse = (() => {
   // actually looked at so the UI can say *why* instead of just "no pulls".
   function pullDiagnostics(rec, segments) {
     const rpm = rec.fields.rpm;
-    const ch = rec.fields.throttle || rec.fields.pedal;
-    const channel = rec.fields.throttle ? "throttle" : rec.fields.pedal ? "pedal" : null;
+    const wc = wotChannel(rec);
+    const ch = wc.series;
+    const channel = wc.name;
     let bestRise = 0, bestSecs = 0;
     segments.forEach((seg) => {
       let i = seg.start;
@@ -351,8 +432,8 @@ const JB4Parse = (() => {
     return out;
   }
 
-  return { parseJB4, parseRaceBox, segment, findPulls, findPullsAcross, pullDiagnostics, PULL_TIERS,
-    _splitCSVLine: splitCSVLine, _num: num };
+  return { parseJB4, parseRaceBox, segment, findPulls, findPullsAcross, pullDiagnostics,
+    wotChannel, mapRuns, PULL_TIERS, _splitCSVLine: splitCSVLine, _num: num };
 })();
 
 if (typeof module !== "undefined" && module.exports) module.exports = JB4Parse; // for node tests

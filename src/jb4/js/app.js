@@ -10,6 +10,14 @@
   // How hard the detected pulls were driven (see PULL_TIERS in parse.js).
   const KIND_LABEL = { wot: "wide-open", partial: "part-throttle", light: "light-throttle" };
 
+  // "map 3 → 5" when the log itself recorded which JB4 map was running.
+  function mapSummary(s) {
+    const runs = JB4Parse.mapRuns(s.rec);
+    if (!runs.length) return "";
+    const maps = [...new Set(runs.map((m) => m.map))];
+    return `<span class="mini-note">${maps.length > 1 ? `maps ${runs.map((m) => m.map).join(" → ")}` : `map ${maps[0]}`}</span>`;
+  }
+
   // ---------- car specs (persisted) ----------
   const SPEC_KEY = "jb4.specs.v1";
   function loadSpecState() {
@@ -54,11 +62,16 @@
     // Strict wide-open first; falls back to part/light-throttle climbs so a log
     // without a proper WOT run still produces something to look at.
     const { pulls, kind } = JB4Parse.findPullsAcross(rec, segments);
-    // pick the strongest-looking pull (widest rpm span) as default
+    // Default to the longest sustained pull. Widest rpm span sounds better but
+    // picks launches out of first gear — short, wheelspin-heavy, and read low;
+    // the longest pull is the one a tuner would actually quote.
     let sel = 0;
     if (pulls.length) {
-      let bestSpan = -1;
-      pulls.forEach((pp, i) => { const span = pp.pull.rpmEnd - pp.pull.rpmStart; if (span > bestSpan) { bestSpan = span; sel = i; } });
+      let best = -1;
+      pulls.forEach((pp, i) => {
+        const score = pp.pull.secs * 1e6 + (pp.pull.rpmEnd - pp.pull.rpmStart); // duration first, span only breaks ties
+        if (score > best) { best = score; sel = i; }
+      });
     }
     const s = { id: nextId++, name, rec, segments, pulls, pullKind: kind,
       diag: pulls.length ? null : JB4Parse.pullDiagnostics(rec, segments),
@@ -247,8 +260,10 @@
           ${s.pulls.length ? `<label class="mini">Pull
             <select class="mini-input sc-pull">${s.pulls.map((pp, i) => {
               const rs = Math.round(pp.pull.rpmStart), re = Math.round(pp.pull.rpmEnd);
-              return `<option value="${i}" ${i === s.sel ? "selected" : ""}>seg ${pp.seg + 1}: ${rs}–${re} rpm (${fmt(pp.pull.secs, 1)}s)</option>`;
+              const mp = pp.pull.map != null ? `map ${pp.pull.map} · ` : "";
+              return `<option value="${i}" ${i === s.sel ? "selected" : ""}>${mp}${Math.round(pp.pull.tStart)}s: ${rs}–${re} rpm (${fmt(pp.pull.secs, 1)}s)</option>`;
             }).join("")}</select></label>` : `<span class="muted small">no rpm climb found — see below</span>`}
+          ${mapSummary(s)}
           <label class="mini gps-label">${s.gps ? `🛰 ${s.gpsName} (${s.gps.n} pts)` : "RaceBox GPS"}
             <label class="btn tiny">${s.gps ? "Replace" : "Attach"}<input type="file" accept=".csv" hidden class="sc-gps"></label>
           </label>
@@ -306,6 +321,8 @@
       card.innerHTML = `<div class="card-head"><h3>Where you drove (RaceBox GPS)</h3><span class="muted">coloured by speed</span></div><div class="canvas-wrap map-wrap"><canvas id="cTrack"></canvas></div>`;
       sec.appendChild(card);
     }
+
+    sec.appendChild(renderTimeline(s));
 
     // recommendations
     const rec = el("div", "panel recs");
@@ -373,6 +390,43 @@
     return sec;
   }
 
+  /* ---------- session timeline (whole log, time on x) ---------- */
+  // The per-pull charts are all RPM-on-x, which hides anything that only shows
+  // up *across* a session: intake temps climbing pull after pull, boost falling
+  // off as things heat up, or where the map was switched. This plots the whole
+  // log against time with the detected pulls picked out.
+  function renderTimeline(s) {
+    const r = s.rec;
+    const runs = JB4Parse.mapRuns(r);
+    const multiMap = runs.length > 1;
+    const sec = el("section", "panel timeline");
+    const bits = [`${s.pulls.length} pull${s.pulls.length === 1 ? "" : "s"}`];
+    if (s.segments.length > 1) bits.push(`${s.segments.length} segments`);
+    if (runs.length) bits.push(multiMap ? `maps ${runs.map((m) => m.map).join(" → ")}` : `map ${runs[0].map}`);
+    sec.appendChild(el("div", "panel-title", `Session timeline · ${bits.join(" · ")}`));
+    sec.appendChild(el("p", "muted small", multiMap
+      ? "The whole log against time. Pulls are picked out in colour, and the map changes part-way through — each map's best pull is compared below."
+      : "The whole log against time. Pulls are picked out in colour, so you can see how intake temps and boost held up across the session."));
+
+    const grid = el("div", "chart-grid");
+    TIMELINE_CHARTS.forEach((c) => {
+      if (c.id === "tMap" && !multiMap) return; // only interesting when it changes
+      if (overviewSeries(r, c)) grid.appendChild(chartCard(c.title, c.id, c.sub));
+    });
+    sec.appendChild(grid);
+    return sec;
+  }
+
+  const TIMELINE_CHARTS = [
+    { fields: ["rpm"], id: "tRpm", title: "RPM & pulls over time", sub: "Whole session; each detected pull highlighted.", color: "#94a3b8", pulls: true },
+    { fields: ["iat"], id: "tIat", title: "Intake air temp over time", sub: "Heat soak — if this climbs pull after pull, later runs lose power.", color: "#dc2626" },
+    { fields: ["boost"], id: "tBoost", title: "Boost over time", sub: "Boost consistency across the session.", color: "#2563eb", also: "boostTarget" },
+    { fields: ["pedal"], id: "tPedal", title: "Pedal vs throttle over time", sub: "Driver demand against throttle-plate angle. On a boosted car the plate stays part-closed at full pedal.", color: "#7c3aed", also: "throttle" },
+    { fields: ["afr"], id: "tAfr", title: "AFR over time", sub: "Lower = richer.", color: "#059669" },
+    { fields: ["avgIgn"], id: "tIgn", title: "Ignition timing over time", sub: "Average advance across the session.", color: "#d97706" },
+    { fields: ["jb4Map"], id: "tMap", title: "JB4 map over time", sub: "Which map was running when.", color: "#0891b2" },
+  ];
+
   // Time-series charts for the no-pull overview (drawn in drawAll). Each entry
   // lists the channels it can use, in preference order.
   const OVERVIEW_CHARTS = [
@@ -395,16 +449,39 @@
   }
 
   /* ---------- compare across maps ---------- */
-  function renderCompare() {
-    const withRes = sessions.filter((s) => s.pulls.length);
-    if (withRes.length < 2) return null;
-    // Flag part-throttle entries inline — comparing a WOT map against one that
-    // never went wide open would otherwise look like a real power difference.
-    const items = withRes.map((s) => {
-      const r = resultFor(s, s.sel);
-      const label = s.pullKind === "wot" ? s.mapLabel : `${s.mapLabel} (${KIND_LABEL[s.pullKind]})`;
-      return { label, name: s.name, dyno: r.dyno, analysis: r.analysis };
+  // Build the comparison entries. A log that switched JB4 maps mid-session is
+  // split into one entry per map using the log's own map channel, so a single
+  // file can be compared against itself instead of needing one file per map.
+  function compareItems() {
+    const out = [];
+    sessions.filter((s) => s.pulls.length).forEach((s) => {
+      const maps = [...new Set(s.pulls.map((pp) => pp.pull.map).filter((m) => m != null))].sort((a, b) => a - b);
+      const push = (idx, label) => {
+        const r = resultFor(s, idx);
+        out.push({ label: s.pullKind === "wot" ? label : `${label} (${KIND_LABEL[s.pullKind]})`,
+          name: s.name, dyno: r.dyno, analysis: r.analysis });
+      };
+      if (maps.length >= 2) {
+        maps.forEach((m) => {
+          let best = -1, bestSpan = -1;
+          s.pulls.forEach((pp, i) => {
+            if (pp.pull.map !== m) return;
+            const span = pp.pull.rpmEnd - pp.pull.rpmStart;
+            if (span > bestSpan) { bestSpan = span; best = i; }
+          });
+          if (best >= 0) push(best, `Map ${m}`);
+        });
+      } else {
+        // Single map (or none logged): keep the user's editable label.
+        push(s.sel, s.mapLabel);
+      }
     });
+    return out;
+  }
+
+  function renderCompare() {
+    const items = compareItems();
+    if (items.length < 2) return null;
     const cmp = Analyze.compareSessions(items);
     if (!cmp) return null;
 
@@ -426,6 +503,29 @@
     sec.appendChild(ul);
     renderCompare._items = items;
     return sec;
+  }
+
+  // Timeline charts: the full channel against time, plus one extra dataset per
+  // detected pull so the runs stand out from the cruising in between.
+  function drawTimeline(s) {
+    const C = JB4Charts, P = C.pts, r = s.rec, t = r.t;
+    const multiMap = JB4Parse.mapRuns(r).length > 1;
+    TIMELINE_CHARTS.forEach((c) => {
+      if (c.id === "tMap" && !multiMap) return;
+      const series = overviewSeries(r, c);
+      if (!series) return;
+      const ds = [{ label: c.title.replace(" over time", "").replace(" & pulls", ""), points: P(t, series), color: c.color, width: c.pulls ? 1.5 : 2 }];
+      const extra = c.also && r.fields[c.also];
+      if (extra) ds.push({ label: c.also === "boostTarget" ? "Target" : "Throttle plate", points: P(t, extra), color: "#94a3b8", dash: [6, 4], width: 1.5 });
+      if (c.pulls) {
+        s.pulls.forEach((pp, i) => {
+          const a = pp.pull.start, b = pp.pull.end;
+          ds.push({ label: `Pull ${i + 1}${pp.pull.map != null && multiMap ? ` (map ${pp.pull.map})` : ""}`,
+            points: P(t.slice(a, b), series.slice(a, b)), color: C.PALETTE[i % C.PALETTE.length], width: 3 });
+        });
+      }
+      C.xyLine(c.id, ds, { xTitle: "seconds", beginAtZero: false });
+    });
   }
 
   /* ---------- draw all charts ---------- */
@@ -460,6 +560,7 @@
       }
       if (d.hasMeasuredSpeed) C.xyLine("cSlip", [{ label: "Wheel slip %", points: P(rpmSlice, d.per.slip), color: "#dc2626", fill: true, width: 2 }], { xTitle: "RPM", yTitle: "slip %" });
       if (s.gps) C.trackMap("cTrack", s.gps, s.gps.speedMps.map((v) => (Number.isFinite(v) ? v * 2.23694 : NaN)), "mph");
+      drawTimeline(s);
     } else if (s) {
       // no-pull overview: raw channels against time
       const C = JB4Charts, P = C.pts;

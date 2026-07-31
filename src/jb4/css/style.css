@@ -123,6 +123,11 @@ code { background: var(--panel-2); border: 1px solid var(--border); border-radiu
 .map-wrap { height: 300px; }
 .chart-offline { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--fg-soft); }
 
+/* ---------- Session timeline ---------- */
+.timeline .chart-grid { margin-top: 12px; }
+.timeline p { margin: 0; }
+.mini-note { align-self: flex-end; padding-bottom: 6px; font-size: 12px; color: var(--fg-soft); }
+
 /* ---------- Notice banner (part-throttle / no-pull caveats) ---------- */
 .notice { border-left: 3px solid var(--fg-soft); }
 .notice.warn { border-left-color: var(--mid); }
