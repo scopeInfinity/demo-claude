@@ -45,11 +45,28 @@ const Analyze = (() => {
     metrics.peakWhp = dyno.peakWhp;
     metrics.peakEhp = dyno.peakEhp;
     metrics.peakTq = dyno.peakTqEngine;
+    metrics.pullKind = pull.kind || "wot";
+
+    // A pull the detector had to relax its throttle gate for can't show peak
+    // power — say so before the headline number, so it isn't read as the max.
+    if (pull.kind && pull.kind !== "wot") {
+      const thr = Number.isFinite(pull.avgThrottle) ? ` (about ${Math.round(pull.avgThrottle)}% average throttle)` : "";
+      add("warn", "Part-throttle pull — power is a floor, not a peak",
+        `This log had no wide-open run, so the numbers come from the best partial-throttle climb in it${thr}. ` +
+        "Real peak power will be higher. Everything else below — boost vs target, timing, AFR and traction — still reflects what you actually drove. " +
+        "For a comparable number, do one uninterrupted wide-open pull in 3rd or 4th from ~2000 rpm to redline.");
+    }
+
     if (spec.ratedHp && Number.isFinite(dyno.peakEhp.value)) {
+      const partial = pull.kind && pull.kind !== "wot";
       const delta = dyno.peakEhp.value - spec.ratedHp;
       const sign = delta >= 0 ? "+" : "";
-      add("info", `Peak ≈ ${Math.round(dyno.peakWhp.value)} whp / ${Math.round(dyno.peakEhp.value)} crank hp`,
-        `Estimated ${Math.round(dyno.peakEhp.value)} hp at the crank vs a factory rating of ${spec.ratedHp} hp (${sign}${Math.round(delta)}). ` +
+      // Only frame it against the factory rating for a real WOT pull — a
+      // part-throttle run is always "down on power" and the gap means nothing.
+      add("info", `${partial ? "Best seen" : "Peak"} ≈ ${Math.round(dyno.peakWhp.value)} whp / ${Math.round(dyno.peakEhp.value)} crank hp`,
+        (partial
+          ? `Estimated ${Math.round(dyno.peakEhp.value)} hp at the crank at the throttle you used — not comparable to the ${spec.ratedHp} hp factory rating until you log a wide-open pull. `
+          : `Estimated ${Math.round(dyno.peakEhp.value)} hp at the crank vs a factory rating of ${spec.ratedHp} hp (${sign}${Math.round(delta)}). `) +
         `Wheel figure uses a ${Math.round(spec.drivetrainLoss * 100)}% drivetrain loss. Calibrate the car specs against a known dyno pull to tighten this up.`);
     }
 

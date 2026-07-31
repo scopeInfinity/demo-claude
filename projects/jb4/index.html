@@ -132,6 +132,13 @@ code { background: var(--panel-2); border: 1px solid var(--border); border-radiu
 .map-wrap { height: 300px; }
 .chart-offline { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--fg-soft); }
 
+/* ---------- Notice banner (part-throttle / no-pull caveats) ---------- */
+.notice { border-left: 3px solid var(--fg-soft); }
+.notice.warn { border-left-color: var(--mid); }
+.notice p { margin: 0 0 8px; font-size: 13px; }
+.notice p:last-child { margin-bottom: 0; }
+.notice .panel-title { margin-bottom: 8px; text-transform: none; font-size: 14px; letter-spacing: 0; color: var(--fg); }
+
 /* ---------- Recommendations ---------- */
 .recs .insight-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .insight { padding: 10px 12px; border-radius: 8px; border-left: 3px solid var(--fg-soft); background: var(--panel-2); }
@@ -590,43 +597,116 @@ const JB4Parse = (() => {
     return bounds.filter(([a, b]) => b - a >= 3).map(([a, b], i) => ({ index: i, start: a, end: b }));
   }
 
-  // Find wide-open-throttle pulls inside a [start,end) range: throttle/pedal
-  // high and RPM climbing over a meaningful span. These are what a dyno cares
-  // about; part-throttle cruising in the same segment is ignored.
-  function findPulls(rec, seg) {
+  // Find pulls inside a [start,end) range: throttle/pedal high and RPM climbing
+  // over a meaningful span. A wide-open run is what the dyno really wants, but
+  // plenty of real logs never reach 80% — part-throttle pump runs, short
+  // shifts, a pedal channel scaled 0–1 instead of 0–100, or a firmware whose
+  // throttle column we didn't recognise. Going blank in those cases is the
+  // wrong answer, so we retry with progressively looser gates and tag what we
+  // found; the UI caveats the numbers rather than showing nothing.
+  const PULL_TIERS = [
+    { kind: "wot", wot: 80, hyst: 15, minRise: 1200, minSecs: 0.8 },
+    { kind: "partial", wot: 45, hyst: 15, minRise: 700, minSecs: 0.6 },
+    { kind: "light", wot: 0, hyst: 0, minRise: 400, minSecs: 0.5 }, // wot:0 = ignore throttle
+  ];
+
+  function avgOver(arr, from, to) {
+    let s = 0, c = 0;
+    for (let i = from; i < to; i++) if (Number.isFinite(arr[i])) { s += arr[i]; c++; }
+    return c ? s / c : NaN;
+  }
+  function maxOver(arr, from = 0, to = arr.length) {
+    let m = -Infinity;
+    for (let i = from; i < to; i++) if (Number.isFinite(arr[i]) && arr[i] > m) m = arr[i];
+    return m === -Infinity ? NaN : m;
+  }
+
+  function scanPulls(rec, seg, tier) {
     const { start, end } = seg;
     const rpm = rec.fields.rpm;
-    const wot = rec.fields.throttle || rec.fields.pedal;
+    const ch = rec.fields.throttle || rec.fields.pedal;
     const t = rec.t;
+    // No throttle channel (or the tier ignores it) => every sample counts as
+    // "on it" and RPM climb alone decides what's a pull.
+    const gated = !!ch && tier.wot > 0;
     const pulls = [];
-    const WOT = 80; // % considered "on it"
-    const MIN_RPM_RISE = 1200;
-    const MIN_SECS = 0.8;
 
     let i = start;
     while (i < end) {
-      const onIt = wot ? wot[i] >= WOT : true;
+      const onIt = gated ? ch[i] >= tier.wot : true;
       if (!onIt) { i++; continue; }
       let j = i;
       let lastRise = i;
       while (j + 1 < end) {
-        const stillWot = wot ? wot[j + 1] >= WOT - 15 : true;
+        const stillOn = gated ? ch[j + 1] >= tier.wot - tier.hyst : true;
         const rising = rpm[j + 1] >= rpm[lastRise] - 250; // allow small dips
-        if (!stillWot) break;
+        if (!stillOn) break;
         if (rpm[j + 1] > rpm[lastRise]) lastRise = j + 1;
         if (!rising && rpm[j + 1] < rpm[lastRise] - 400) break; // clearly done climbing
         j++;
       }
       const rise = rpm[lastRise] - rpm[i];
       const secs = t[j] - t[i];
-      if (rise >= MIN_RPM_RISE && secs >= MIN_SECS) {
-        pulls.push({ start: i, end: Math.min(j + 1, end), rpmStart: rpm[i], rpmEnd: rpm[lastRise], secs });
+      if (rise >= tier.minRise && secs >= tier.minSecs) {
+        const stop = Math.min(j + 1, end);
+        pulls.push({ start: i, end: stop, rpmStart: rpm[i], rpmEnd: rpm[lastRise], secs,
+          kind: tier.kind, avgThrottle: ch ? avgOver(ch, i, stop) : NaN });
         i = j + 1;
       } else {
         i = j > i ? j + 1 : i + 1;
       }
     }
     return pulls;
+  }
+
+  // Single segment, strictest tier that finds anything.
+  function findPulls(rec, seg) {
+    for (const tier of PULL_TIERS) {
+      const found = scanPulls(rec, seg, tier);
+      if (found.length) return found;
+    }
+    return [];
+  }
+
+  // Whole log: pick the tier by looking at every segment together, so one clean
+  // WOT run doesn't get buried under "light" cruise sections from elsewhere in
+  // the same file. Returns the flat [{seg, pull}] list the UI renders.
+  function findPullsAcross(rec, segments) {
+    for (const tier of PULL_TIERS) {
+      const out = [];
+      segments.forEach((seg) => scanPulls(rec, seg, tier).forEach((p) => out.push({ seg: seg.index, pull: p })));
+      if (out.length) return { pulls: out, kind: tier.kind };
+    }
+    return { pulls: [], kind: null };
+  }
+
+  // When even the loosest tier finds nothing, report the numbers the gates
+  // actually looked at so the UI can say *why* instead of just "no pulls".
+  function pullDiagnostics(rec, segments) {
+    const rpm = rec.fields.rpm;
+    const ch = rec.fields.throttle || rec.fields.pedal;
+    const channel = rec.fields.throttle ? "throttle" : rec.fields.pedal ? "pedal" : null;
+    let bestRise = 0, bestSecs = 0;
+    segments.forEach((seg) => {
+      let i = seg.start;
+      while (i < seg.end) {
+        let j = i, lastRise = i;
+        while (j + 1 < seg.end && rpm[j + 1] >= rpm[lastRise] - 400) {
+          if (rpm[j + 1] > rpm[lastRise]) lastRise = j + 1;
+          j++;
+        }
+        const rise = rpm[lastRise] - rpm[i];
+        if (rise > bestRise) { bestRise = rise; bestSecs = rec.t[lastRise] - rec.t[i]; }
+        i = j > i ? j + 1 : i + 1;
+      }
+    });
+    return {
+      channel,
+      maxThrottle: ch ? maxOver(ch) : NaN,
+      maxRpm: maxOver(rpm),
+      biggestRpmRise: bestRise,
+      riseSecs: bestSecs,
+    };
   }
 
   // ---- RaceBox GPS export ----
@@ -669,7 +749,8 @@ const JB4Parse = (() => {
     return out;
   }
 
-  return { parseJB4, parseRaceBox, segment, findPulls, _splitCSVLine: splitCSVLine, _num: num };
+  return { parseJB4, parseRaceBox, segment, findPulls, findPullsAcross, pullDiagnostics, PULL_TIERS,
+    _splitCSVLine: splitCSVLine, _num: num };
 })();
 
 if (typeof module !== "undefined" && module.exports) module.exports = JB4Parse; // for node tests
@@ -897,11 +978,28 @@ const Analyze = (() => {
     metrics.peakWhp = dyno.peakWhp;
     metrics.peakEhp = dyno.peakEhp;
     metrics.peakTq = dyno.peakTqEngine;
+    metrics.pullKind = pull.kind || "wot";
+
+    // A pull the detector had to relax its throttle gate for can't show peak
+    // power — say so before the headline number, so it isn't read as the max.
+    if (pull.kind && pull.kind !== "wot") {
+      const thr = Number.isFinite(pull.avgThrottle) ? ` (about ${Math.round(pull.avgThrottle)}% average throttle)` : "";
+      add("warn", "Part-throttle pull — power is a floor, not a peak",
+        `This log had no wide-open run, so the numbers come from the best partial-throttle climb in it${thr}. ` +
+        "Real peak power will be higher. Everything else below — boost vs target, timing, AFR and traction — still reflects what you actually drove. " +
+        "For a comparable number, do one uninterrupted wide-open pull in 3rd or 4th from ~2000 rpm to redline.");
+    }
+
     if (spec.ratedHp && Number.isFinite(dyno.peakEhp.value)) {
+      const partial = pull.kind && pull.kind !== "wot";
       const delta = dyno.peakEhp.value - spec.ratedHp;
       const sign = delta >= 0 ? "+" : "";
-      add("info", `Peak ≈ ${Math.round(dyno.peakWhp.value)} whp / ${Math.round(dyno.peakEhp.value)} crank hp`,
-        `Estimated ${Math.round(dyno.peakEhp.value)} hp at the crank vs a factory rating of ${spec.ratedHp} hp (${sign}${Math.round(delta)}). ` +
+      // Only frame it against the factory rating for a real WOT pull — a
+      // part-throttle run is always "down on power" and the gap means nothing.
+      add("info", `${partial ? "Best seen" : "Peak"} ≈ ${Math.round(dyno.peakWhp.value)} whp / ${Math.round(dyno.peakEhp.value)} crank hp`,
+        (partial
+          ? `Estimated ${Math.round(dyno.peakEhp.value)} hp at the crank at the throttle you used — not comparable to the ${spec.ratedHp} hp factory rating until you log a wide-open pull. `
+          : `Estimated ${Math.round(dyno.peakEhp.value)} hp at the crank vs a factory rating of ${spec.ratedHp} hp (${sign}${Math.round(delta)}). `) +
         `Wheel figure uses a ${Math.round(spec.drivetrainLoss * 100)}% drivetrain loss. Calibrate the car specs against a known dyno pull to tighten this up.`);
     }
 
@@ -1217,6 +1315,8 @@ const JB4Charts = (() => {
   const $ = (s, r = document) => r.querySelector(s);
   const el = (tag, cls, html) => { const n = document.createElement(tag); if (cls) n.className = cls; if (html != null) n.innerHTML = html; return n; };
   const fmt = (v, d = 0) => (v == null || !Number.isFinite(v) ? "—" : v.toFixed(d));
+  // How hard the detected pulls were driven (see PULL_TIERS in parse.js).
+  const KIND_LABEL = { wot: "wide-open", partial: "part-throttle", light: "light-throttle" };
 
   // ---------- car specs (persisted) ----------
   const SPEC_KEY = "jb4.specs.v1";
@@ -1259,15 +1359,18 @@ const JB4Charts = (() => {
     try { rec = JB4Parse.parseJB4(text); }
     catch (e) { alert(`Couldn't read "${name}":\n${e.message}`); return; }
     const segments = JB4Parse.segment(rec);
-    const pulls = [];
-    segments.forEach((seg) => JB4Parse.findPulls(rec, seg).forEach((p) => pulls.push({ seg: seg.index, pull: p })));
+    // Strict wide-open first; falls back to part/light-throttle climbs so a log
+    // without a proper WOT run still produces something to look at.
+    const { pulls, kind } = JB4Parse.findPullsAcross(rec, segments);
     // pick the strongest-looking pull (widest rpm span) as default
     let sel = 0;
     if (pulls.length) {
       let bestSpan = -1;
       pulls.forEach((pp, i) => { const span = pp.pull.rpmEnd - pp.pull.rpmStart; if (span > bestSpan) { bestSpan = span; sel = i; } });
     }
-    const s = { id: nextId++, name, rec, segments, pulls, gps: null, mapLabel: guessMap(name, sessions.length), sel };
+    const s = { id: nextId++, name, rec, segments, pulls, pullKind: kind,
+      diag: pulls.length ? null : JB4Parse.pullDiagnostics(rec, segments),
+      gps: null, mapLabel: guessMap(name, sessions.length), sel };
     sessions.push(s);
     selId = s.id;
     render();
@@ -1443,7 +1546,7 @@ const JB4Charts = (() => {
           ${r.hasTimestamp ? `⏱ timestamp OK` : `⚠ no timestamp (assumed 10 Hz)`}
           · ${fmt(r.duration, 1)}s · ${r.sampleHz ? fmt(r.sampleHz, 0) + " Hz" : "—"}
           · ${s.segments.length} segment${s.segments.length > 1 ? "s" : ""}
-          · ${s.pulls.length} pull${s.pulls.length === 1 ? "" : "s"} · ${chans} channels
+          · ${s.pulls.length ? `${s.pulls.length} ${KIND_LABEL[s.pullKind]} pull${s.pulls.length === 1 ? "" : "s"}` : "no pulls"} · ${chans} channels
         </div>
         <div class="sc-row">
           <label class="mini">Map/label
@@ -1453,7 +1556,7 @@ const JB4Charts = (() => {
             <select class="mini-input sc-pull">${s.pulls.map((pp, i) => {
               const rs = Math.round(pp.pull.rpmStart), re = Math.round(pp.pull.rpmEnd);
               return `<option value="${i}" ${i === s.sel ? "selected" : ""}>seg ${pp.seg + 1}: ${rs}–${re} rpm (${fmt(pp.pull.secs, 1)}s)</option>`;
-            }).join("")}</select></label>` : `<span class="muted small">no wide-open pulls found</span>`}
+            }).join("")}</select></label>` : `<span class="muted small">no rpm climb found — see below</span>`}
           <label class="mini gps-label">${s.gps ? `🛰 ${s.gpsName} (${s.gps.n} pts)` : "RaceBox GPS"}
             <label class="btn tiny">${s.gps ? "Replace" : "Attach"}<input type="file" accept=".csv" hidden class="sc-gps"></label>
           </label>
@@ -1473,22 +1576,23 @@ const JB4Charts = (() => {
   /* ---------- results for the selected session ---------- */
   function renderResults(s) {
     const sec = el("section", "results");
-    if (!s.pulls.length) {
-      sec.appendChild(el("div", "panel", `<div class="panel-title">${s.name}</div><p class="muted">No wide-open-throttle pulls were detected in this log. The dyno needs a run where you hold full throttle and the RPM climbs. You can still see the raw log had ${s.rec.n} rows across ${s.segments.length} segment(s).</p>`));
-      return sec;
-    }
+    if (!s.pulls.length) return renderOverview(s);
     const res = resultFor(s, s.sel);
     const d = res.dyno;
+    const partial = s.pullKind !== "wot";
+    const note = partial ? " · part-throttle, not a max-power run" : "";
 
     // KPI row
     const kpis = el("div", "kpi-row");
     const kpi = (val, unit, label, sub) => `<div class="kpi"><div class="kpi-value">${val}<span class="u"> ${unit}</span></div><div class="kpi-label">${label}</div>${sub ? `<div class="kpi-sub">${sub}</div>` : ""}</div>`;
     kpis.innerHTML =
-      kpi(fmt(d.peakWhp.value), "whp", "Peak wheel HP", `@ ${fmt(d.peakWhp.rpm)} rpm`) +
-      kpi(fmt(d.peakEhp.value), "hp", "Peak crank HP", `est. at engine`) +
-      kpi(fmt(d.peakTqEngine.value), "lb-ft", "Peak torque", `@ ${fmt(d.peakTqEngine.rpm)} rpm`) +
+      kpi(fmt(d.peakWhp.value), "whp", partial ? "Wheel HP (best seen)" : "Peak wheel HP", `@ ${fmt(d.peakWhp.rpm)} rpm${note}`) +
+      kpi(fmt(d.peakEhp.value), "hp", partial ? "Crank HP (best seen)" : "Peak crank HP", `est. at engine`) +
+      kpi(fmt(d.peakTqEngine.value), "lb-ft", partial ? "Torque (best seen)" : "Peak torque", `@ ${fmt(d.peakTqEngine.rpm)} rpm`) +
       kpi(d.hasMeasuredSpeed ? fmt(d.maxSlip) : "—", "%", "Max wheel slip", d.hasMeasuredSpeed ? "vs measured speed" : "no speed channel");
     sec.appendChild(kpis);
+
+    if (partial) sec.appendChild(renderPartialBanner(s));
 
     const head = el("div", "results-head");
     head.innerHTML = `<h2>${s.name} · ${s.mapLabel}</h2><div class="muted small">Gear ${d.speed.gear} (${d.speed.source}) · ${d.hasMeasuredSpeed ? "slip check active" : "no slip check"}</div>`;
@@ -1525,6 +1629,70 @@ const JB4Charts = (() => {
     return sec;
   }
 
+  // Shown when the log had no wide-open run and we fell back to a looser tier.
+  // The curves, boost/timing/AFR health and slip are all still meaningful — it's
+  // only the headline power number that shouldn't be read as the car's max.
+  function renderPartialBanner(s) {
+    const p = s.pulls[s.sel].pull;
+    const thr = Number.isFinite(p.avgThrottle) ? `${Math.round(p.avgThrottle)}% average ${s.rec.fields.throttle ? "throttle" : "pedal"}` : "no throttle channel logged";
+    const light = s.pullKind === "light";
+    const b = el("div", "panel notice warn");
+    b.innerHTML = `<div class="panel-title">⚠️ ${light ? "No real throttle application in this log" : "Part-throttle pull — power reads low"}</div>
+      <p class="muted">Nothing in this log reached wide-open throttle, so the dyno used ${light ? "the strongest RPM climb it could find" : "the best part-throttle pull"} (${thr}, ${Math.round(p.rpmStart)}–${Math.round(p.rpmEnd)} rpm over ${fmt(p.secs, 1)}s).
+      <strong>Treat the HP and torque figures as a floor, not your car's peak</strong> — at partial throttle the engine simply isn't making full power.
+      The curve shapes, boost vs target, timing, AFR and wheel-slip checks below are still valid for what you drove.</p>
+      <p class="muted small">For a proper number: from a roll in 3rd or 4th, floor it from about 2000 rpm to redline in one go, with no shifts or lifts.${s.rec.fields.throttle || s.rec.fields.pedal ? "" : " Also enable throttle/pedal logging in the JB4 app so pulls can be detected properly."}</p>`;
+    return b;
+  }
+
+  // Last resort: not even a 400 rpm climb anywhere. Rather than a dead end,
+  // show the raw log over time plus what the detector actually measured, so
+  // it's obvious whether the log is the problem or the channel mapping is.
+  function renderOverview(s) {
+    const sec = el("section", "results");
+    const d = s.diag || JB4Parse.pullDiagnostics(s.rec, s.segments);
+    const r = s.rec;
+    const thr = Number.isFinite(d.maxThrottle)
+      ? `peak ${d.channel} was ${Math.round(d.maxThrottle)}${d.maxThrottle <= 1.5 ? " (0–1 scale?)" : "%"}`
+      : "this log has no throttle or pedal channel";
+
+    const p = el("div", "panel notice warn");
+    p.innerHTML = `<div class="panel-title">⚠️ No pull to dyno in this log</div>
+      <p class="muted">The dyno needs the RPM to climb under throttle. Here the biggest continuous RPM rise was
+      <strong>${Math.round(d.biggestRpmRise)} rpm</strong> over ${fmt(d.riseSecs, 1)}s (max ${Math.round(d.maxRpm)} rpm), and ${thr}.
+      That reads as cruising or idling rather than a run.</p>
+      <p class="muted small">Log again with a wide-open pull — 3rd or 4th gear, floor it from ~2000 rpm to redline without lifting.
+      ${d.maxThrottle <= 1.5 && d.channel ? "If your throttle channel really is 0–1 rather than 0–100, that's a scaling quirk worth reporting. " : ""}Everything the log <em>did</em> capture is plotted below.</p>`;
+    sec.appendChild(p);
+
+    const head = el("div", "results-head");
+    head.innerHTML = `<h2>${s.name} · raw log</h2><div class="muted small">${r.n} rows · ${fmt(r.duration, 1)}s · ${s.segments.length} segment${s.segments.length > 1 ? "s" : ""} · ${Object.keys(r.fields).length} channels</div>`;
+    sec.appendChild(head);
+
+    const grid = el("div", "chart-grid");
+    OVERVIEW_CHARTS.forEach((c) => { if (overviewSeries(r, c)) grid.appendChild(chartCard(c.title, c.id, c.sub)); });
+    sec.appendChild(grid);
+
+    if (s.gps) {
+      const card = el("div", "card wide");
+      card.innerHTML = `<div class="card-head"><h3>Where you drove (RaceBox GPS)</h3><span class="muted">coloured by speed</span></div><div class="canvas-wrap map-wrap"><canvas id="cTrack"></canvas></div>`;
+      sec.appendChild(card);
+    }
+    return sec;
+  }
+
+  // Time-series charts for the no-pull overview (drawn in drawAll). Each entry
+  // lists the channels it can use, in preference order.
+  const OVERVIEW_CHARTS = [
+    { fields: ["rpm"], id: "oRpm", title: "RPM over time", sub: "The whole log. A pull looks like a steep, uninterrupted climb.", color: "#2563eb" },
+    { fields: ["throttle", "pedal"], id: "oThr", title: "Throttle over time", sub: "Wide open is ~80–100%. The dyno looks for sustained high throttle.", color: "#7c3aed" },
+    { fields: ["boost"], id: "oBoost", title: "Boost over time", sub: "Charge pressure across the log.", color: "#059669" },
+    { fields: ["mph"], id: "oMph", title: "Speed over time", sub: "Measured speed channel.", color: "#d97706" },
+    { fields: ["avgIgn"], id: "oIgn", title: "Ignition timing over time", sub: "Average advance.", color: "#dc2626" },
+    { fields: ["afr"], id: "oAfr", title: "AFR over time", sub: "Lower = richer.", color: "#0891b2" },
+  ];
+  const overviewSeries = (rec, c) => { for (const f of c.fields) if (rec.fields[f]) return rec.fields[f]; return null; };
+
   function fndClass(l) { return l === "bad" ? "bad" : l === "warn" ? "warn" : l === "good" ? "good" : "info"; }
   function icon(l) { return l === "bad" ? "⛔" : l === "warn" ? "⚠️" : l === "good" ? "✅" : "ℹ️"; }
 
@@ -1538,7 +1706,13 @@ const JB4Charts = (() => {
   function renderCompare() {
     const withRes = sessions.filter((s) => s.pulls.length);
     if (withRes.length < 2) return null;
-    const items = withRes.map((s) => { const r = resultFor(s, s.sel); return { label: s.mapLabel, name: s.name, dyno: r.dyno, analysis: r.analysis }; });
+    // Flag part-throttle entries inline — comparing a WOT map against one that
+    // never went wide open would otherwise look like a real power difference.
+    const items = withRes.map((s) => {
+      const r = resultFor(s, s.sel);
+      const label = s.pullKind === "wot" ? s.mapLabel : `${s.mapLabel} (${KIND_LABEL[s.pullKind]})`;
+      return { label, name: s.name, dyno: r.dyno, analysis: r.analysis };
+    });
     const cmp = Analyze.compareSessions(items);
     if (!cmp) return null;
 
@@ -1593,6 +1767,15 @@ const JB4Charts = (() => {
         C.xyLine("cAfr", ds, { xTitle: "RPM", yTitle: "AFR", beginAtZero: false });
       }
       if (d.hasMeasuredSpeed) C.xyLine("cSlip", [{ label: "Wheel slip %", points: P(rpmSlice, d.per.slip), color: "#dc2626", fill: true, width: 2 }], { xTitle: "RPM", yTitle: "slip %" });
+      if (s.gps) C.trackMap("cTrack", s.gps, s.gps.speedMps.map((v) => (Number.isFinite(v) ? v * 2.23694 : NaN)), "mph");
+    } else if (s) {
+      // no-pull overview: raw channels against time
+      const C = JB4Charts, P = C.pts;
+      OVERVIEW_CHARTS.forEach((c) => {
+        const series = overviewSeries(s.rec, c);
+        if (series) C.xyLine(c.id, [{ label: c.title.replace(" over time", ""), points: P(s.rec.t, series), color: c.color, width: 2 }],
+          { xTitle: "seconds", beginAtZero: false });
+      });
       if (s.gps) C.trackMap("cTrack", s.gps, s.gps.speedMps.map((v) => (Number.isFinite(v) ? v * 2.23694 : NaN)), "mph");
     }
 

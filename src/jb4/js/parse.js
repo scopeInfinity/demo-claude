@@ -199,43 +199,116 @@ const JB4Parse = (() => {
     return bounds.filter(([a, b]) => b - a >= 3).map(([a, b], i) => ({ index: i, start: a, end: b }));
   }
 
-  // Find wide-open-throttle pulls inside a [start,end) range: throttle/pedal
-  // high and RPM climbing over a meaningful span. These are what a dyno cares
-  // about; part-throttle cruising in the same segment is ignored.
-  function findPulls(rec, seg) {
+  // Find pulls inside a [start,end) range: throttle/pedal high and RPM climbing
+  // over a meaningful span. A wide-open run is what the dyno really wants, but
+  // plenty of real logs never reach 80% — part-throttle pump runs, short
+  // shifts, a pedal channel scaled 0–1 instead of 0–100, or a firmware whose
+  // throttle column we didn't recognise. Going blank in those cases is the
+  // wrong answer, so we retry with progressively looser gates and tag what we
+  // found; the UI caveats the numbers rather than showing nothing.
+  const PULL_TIERS = [
+    { kind: "wot", wot: 80, hyst: 15, minRise: 1200, minSecs: 0.8 },
+    { kind: "partial", wot: 45, hyst: 15, minRise: 700, minSecs: 0.6 },
+    { kind: "light", wot: 0, hyst: 0, minRise: 400, minSecs: 0.5 }, // wot:0 = ignore throttle
+  ];
+
+  function avgOver(arr, from, to) {
+    let s = 0, c = 0;
+    for (let i = from; i < to; i++) if (Number.isFinite(arr[i])) { s += arr[i]; c++; }
+    return c ? s / c : NaN;
+  }
+  function maxOver(arr, from = 0, to = arr.length) {
+    let m = -Infinity;
+    for (let i = from; i < to; i++) if (Number.isFinite(arr[i]) && arr[i] > m) m = arr[i];
+    return m === -Infinity ? NaN : m;
+  }
+
+  function scanPulls(rec, seg, tier) {
     const { start, end } = seg;
     const rpm = rec.fields.rpm;
-    const wot = rec.fields.throttle || rec.fields.pedal;
+    const ch = rec.fields.throttle || rec.fields.pedal;
     const t = rec.t;
+    // No throttle channel (or the tier ignores it) => every sample counts as
+    // "on it" and RPM climb alone decides what's a pull.
+    const gated = !!ch && tier.wot > 0;
     const pulls = [];
-    const WOT = 80; // % considered "on it"
-    const MIN_RPM_RISE = 1200;
-    const MIN_SECS = 0.8;
 
     let i = start;
     while (i < end) {
-      const onIt = wot ? wot[i] >= WOT : true;
+      const onIt = gated ? ch[i] >= tier.wot : true;
       if (!onIt) { i++; continue; }
       let j = i;
       let lastRise = i;
       while (j + 1 < end) {
-        const stillWot = wot ? wot[j + 1] >= WOT - 15 : true;
+        const stillOn = gated ? ch[j + 1] >= tier.wot - tier.hyst : true;
         const rising = rpm[j + 1] >= rpm[lastRise] - 250; // allow small dips
-        if (!stillWot) break;
+        if (!stillOn) break;
         if (rpm[j + 1] > rpm[lastRise]) lastRise = j + 1;
         if (!rising && rpm[j + 1] < rpm[lastRise] - 400) break; // clearly done climbing
         j++;
       }
       const rise = rpm[lastRise] - rpm[i];
       const secs = t[j] - t[i];
-      if (rise >= MIN_RPM_RISE && secs >= MIN_SECS) {
-        pulls.push({ start: i, end: Math.min(j + 1, end), rpmStart: rpm[i], rpmEnd: rpm[lastRise], secs });
+      if (rise >= tier.minRise && secs >= tier.minSecs) {
+        const stop = Math.min(j + 1, end);
+        pulls.push({ start: i, end: stop, rpmStart: rpm[i], rpmEnd: rpm[lastRise], secs,
+          kind: tier.kind, avgThrottle: ch ? avgOver(ch, i, stop) : NaN });
         i = j + 1;
       } else {
         i = j > i ? j + 1 : i + 1;
       }
     }
     return pulls;
+  }
+
+  // Single segment, strictest tier that finds anything.
+  function findPulls(rec, seg) {
+    for (const tier of PULL_TIERS) {
+      const found = scanPulls(rec, seg, tier);
+      if (found.length) return found;
+    }
+    return [];
+  }
+
+  // Whole log: pick the tier by looking at every segment together, so one clean
+  // WOT run doesn't get buried under "light" cruise sections from elsewhere in
+  // the same file. Returns the flat [{seg, pull}] list the UI renders.
+  function findPullsAcross(rec, segments) {
+    for (const tier of PULL_TIERS) {
+      const out = [];
+      segments.forEach((seg) => scanPulls(rec, seg, tier).forEach((p) => out.push({ seg: seg.index, pull: p })));
+      if (out.length) return { pulls: out, kind: tier.kind };
+    }
+    return { pulls: [], kind: null };
+  }
+
+  // When even the loosest tier finds nothing, report the numbers the gates
+  // actually looked at so the UI can say *why* instead of just "no pulls".
+  function pullDiagnostics(rec, segments) {
+    const rpm = rec.fields.rpm;
+    const ch = rec.fields.throttle || rec.fields.pedal;
+    const channel = rec.fields.throttle ? "throttle" : rec.fields.pedal ? "pedal" : null;
+    let bestRise = 0, bestSecs = 0;
+    segments.forEach((seg) => {
+      let i = seg.start;
+      while (i < seg.end) {
+        let j = i, lastRise = i;
+        while (j + 1 < seg.end && rpm[j + 1] >= rpm[lastRise] - 400) {
+          if (rpm[j + 1] > rpm[lastRise]) lastRise = j + 1;
+          j++;
+        }
+        const rise = rpm[lastRise] - rpm[i];
+        if (rise > bestRise) { bestRise = rise; bestSecs = rec.t[lastRise] - rec.t[i]; }
+        i = j > i ? j + 1 : i + 1;
+      }
+    });
+    return {
+      channel,
+      maxThrottle: ch ? maxOver(ch) : NaN,
+      maxRpm: maxOver(rpm),
+      biggestRpmRise: bestRise,
+      riseSecs: bestSecs,
+    };
   }
 
   // ---- RaceBox GPS export ----
@@ -278,7 +351,8 @@ const JB4Parse = (() => {
     return out;
   }
 
-  return { parseJB4, parseRaceBox, segment, findPulls, _splitCSVLine: splitCSVLine, _num: num };
+  return { parseJB4, parseRaceBox, segment, findPulls, findPullsAcross, pullDiagnostics, PULL_TIERS,
+    _splitCSVLine: splitCSVLine, _num: num };
 })();
 
 if (typeof module !== "undefined" && module.exports) module.exports = JB4Parse; // for node tests

@@ -33,6 +33,12 @@ more power on a higher map, and am I just spinning the tyres?*
   session can hold several wide-open runs with idle/rolling gaps between them.
   The tool finds the breaks in the timeline ("disconnected time zones") and each
   wide-open-throttle pull gets its own clean set of graphs.
+- **Works on part-throttle logs too.** Not every log has a proper wide-open run.
+  If there's no WOT pull, the detector relaxes its gates (part-throttle, then
+  any sustained RPM climb) and analyses the best pull it can find, clearly
+  flagged so the HP figure is read as a floor rather than your car's peak. If
+  there's no climb at all, you still get the raw log plotted against time plus
+  the numbers that explain *why* nothing was detected.
 - **Wheel-spin detection.** It compares how fast the wheels *should* be turning
   (from RPM + gear) against how fast you *actually* moved (speed channel / GPS).
   The gap is slip — power going to smoke, not speed — and it tells you where to
