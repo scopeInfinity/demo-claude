@@ -132,6 +132,44 @@ code { background: var(--panel-2); border: 1px solid var(--border); border-radiu
 .map-wrap { height: 300px; }
 .chart-offline { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--fg-soft); }
 
+/* ---------- Help tips ---------- */
+.help-host { position: relative; }
+.help-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; margin-left: 6px; padding: 0; vertical-align: middle;
+  border: 1px solid var(--border); border-radius: 50%; background: var(--panel-2);
+  color: var(--fg-soft); font-size: 11px; font-weight: 700; line-height: 1;
+  cursor: pointer; flex: none;
+}
+.help-btn:hover, .help-btn:focus-visible { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
+.help-btn[aria-expanded="true"] { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
+.help-bubble {
+  margin-top: 8px; padding: 10px 12px; border-radius: 8px;
+  background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--primary);
+  font-size: 12.5px; line-height: 1.5; font-weight: 400; text-transform: none; letter-spacing: 0;
+  color: var(--fg); white-space: normal;
+}
+.help-bubble strong { display: block; margin-bottom: 4px; font-size: 13px; }
+.help-bubble p { margin: 6px 0 0; color: var(--fg-soft); }
+.help-tag {
+  display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 4px;
+  background: var(--border); color: var(--fg); font-size: 10.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .03em;
+}
+.help-tag.good { background: var(--good); color: #fff; }
+/* The KPI row is a grid — let its bubble span every column so it stays legible
+   on a phone, where each tile is only ~190px wide. */
+.kpi-row > .help-bubble { grid-column: 1 / -1; margin-top: 0; }
+
+/* ---------- Guide ("what do these numbers mean") ---------- */
+.guide summary { cursor: pointer; font-size: 13.5px; }
+.guide summary strong { color: var(--fg); }
+.guide-body h4 { margin: 16px 0 8px; font-size: 13px; }
+.guide-table td { text-align: left; white-space: normal; }
+.guide-table td.name { font-weight: 600; }
+.guide-list { margin: 0; padding-left: 20px; font-size: 13px; }
+.guide-list li { margin-bottom: 5px; }
+
 /* ---------- Session timeline ---------- */
 .timeline .chart-grid { margin-top: 12px; }
 .timeline p { margin: 0; }
@@ -328,6 +366,207 @@ const CAR_SPECS = (() => {
 
   return { PRESETS, DEFAULT, G, LB_TO_KG, totalMassKg, tireCirc };
 })();
+
+
+/* ===== src/jb4/js/help.js ===== */
+/*
+ * help.js — Plain-English explanations for every number the tool shows.
+ *
+ * The app throws a lot of jargon at you: rotating-mass factor, Crr, whp vs
+ * crank hp, "timing pulled 4°". Each entry below answers the same three
+ * questions — what is this, what does a healthy car look like, and what do I do
+ * about it — so nothing on screen is a mystery number.
+ *
+ * Health thresholds here are deliberately the same ones analyze.js actually
+ * tests against, so the advice and the findings can never disagree. If you
+ * change a threshold there, change it here too.
+ *
+ * Rendering: every help entry is reached by a "?" button. Buttons work by tap
+ * as well as hover — a lot of this gets read on a phone in a car park, where a
+ * `title=` tooltip would be invisible.
+ */
+const Help = (() => {
+  // key -> { title, what, healthy?, tip? }
+  const HELP = {
+    /* ---------------- headline numbers ---------------- */
+    peakWhp: {
+      title: "Wheel horsepower",
+      what: "Power actually reaching the road, worked out from how hard your car accelerated a known mass against aero and rolling drag. This is the honest number — it's what a rolling-road dyno measures.",
+      healthy: "Whatever your car makes on a good pull. What matters is consistency: the same car on the same map should repeat within a few percent, run to run.",
+      tip: "It reads low if the car specs are wrong (weight especially), if you weren't at full throttle, or if the wheels were spinning. Fix those before chasing the number.",
+    },
+    peakEhp: {
+      title: "Crank horsepower",
+      what: "Wheel horsepower with drivetrain losses added back on, so you can compare against a manufacturer's quoted figure — those are always measured at the engine, before the gearbox and diff take their cut.",
+      healthy: "Compare it to your car's factory rating. A healthy stock car lands near it; a tuned one should be clearly above.",
+      tip: "This number is only as good as the 'Drivetrain loss' setting — it's a straight division. It does not change what the car actually does; it's wheel horsepower wearing a suit.",
+    },
+    peakTq: {
+      title: "Peak torque",
+      what: "The hardest twist the engine produced, in lb-ft. Torque is the shove you feel; horsepower is torque combined with how fast the engine is spinning (hp = torque × rpm ÷ 5252).",
+      healthy: "On a turbo car torque should rise quickly and then hold roughly flat across the middle of the rev range. A sharp peak that collapses usually means boost isn't holding.",
+      tip: "Torque low down comes from boost arriving early — spool. Up top it's about airflow and fuelling.",
+    },
+    maxSlip: {
+      title: "Wheel slip",
+      what: "How much faster the wheels turned than the car actually travelled, comparing engine-RPM-derived speed against your measured speed channel. The gap is rubber going up in smoke instead of into forward motion.",
+      healthy: "Under 8% is treated as clean. Above that the power figures in that rev range are optimistic, because some of the acceleration never happened.",
+      tip: "Use a higher gear (3rd or 4th), roll into the throttle above about 40 mph, or drop a map level. On a cold or damp surface expect more of it.",
+    },
+
+    /* ---------------- health checks ---------------- */
+    boostVsTarget: {
+      title: "Boost vs target",
+      what: "Your actual charge pressure against the boost the JB4 was asking for. The gap between the two is the single most useful health signal on a tuned turbo car.",
+      healthy: "Actual should track target within about 1.5 psi through the pull. Consistently more than that under target, or more than 2 psi over, gets flagged.",
+      tip: "Falling short usually means a boost leak, a loose charge pipe, a tired wastegate, or fuelling limits pulling it back — a smoke test finds most of it. Overshooting stresses the setup and can trip safeties.",
+    },
+    timing: {
+      title: "Ignition timing",
+      what: "How far before top-dead-centre the spark fires, averaged across cylinders. The DME pulls timing back the instant it hears knock, so a sudden drop under boost is the engine protecting itself.",
+      healthy: "Steady, or drifting gently. A drop of 3° or more under boost is flagged as a warning; 6° or more is serious.",
+      tip: "Usual causes are low octane or stale fuel, hot intake temperatures, or simply too aggressive a map. Try better fuel, let it cool, and drop a map level if it repeats.",
+    },
+    afr: {
+      title: "Air/fuel ratio",
+      what: "How much air the engine burned per unit of fuel. Lower numbers are richer — more fuel. Under boost, extra fuel carries heat away and is what keeps pistons intact.",
+      healthy: "Richer than about 12.8:1 at full throttle on pump fuel, or 12.0:1 on an E30-plus ethanol blend.",
+      tip: "Lean spots under boost are the most expensive fault on this page. Check fuel pressure, pump health and injector condition before another full-throttle run.",
+    },
+    iat: {
+      title: "Intake air temperature",
+      what: "How hot the air is by the time it reaches the engine. Hot air is thin air, and the DME also pulls timing to stay safe as it climbs — this is why the fourth pull of the day always feels flat.",
+      healthy: "Below 50°C (122°F). Above that it's flagged, and past 65°C (149°F) you're leaving real power on the table.",
+      tip: "Let the car cool between runs — a few minutes with the bonnet up on a hot day. Back-to-back pulls will always be slower than the first.",
+    },
+
+    /* ---------------- car spec fields ---------------- */
+    curbLb: {
+      title: "Curb weight",
+      what: "What the car weighs empty, with fluids. This feeds the mass × acceleration term, which is the biggest single ingredient in the horsepower estimate.",
+      healthy: "Look up the figure for your exact model and drivetrain. A BMW G20 330i sDrive is around 3580 lb.",
+      tip: "Get this wrong and everything is wrong by the same proportion — 5% heavy here means roughly 5% too much horsepower reported.",
+    },
+    driverLb: {
+      title: "Driver + fuel",
+      what: "You, your passengers, fuel and anything in the boot. Added to curb weight to get the mass the engine actually had to shift.",
+      healthy: "Your weight plus roughly 60-90 lb for a half to full tank.",
+      tip: "Worth setting honestly — 150 lb on a 3600 lb car is about 4% of the total, and it moves the horsepower figure by about the same.",
+    },
+    drivetrainLoss: {
+      title: "Drivetrain loss",
+      what: "The fraction of engine power eaten by the gearbox, driveshaft and diff before it reaches the tyres. Used only to convert wheel horsepower into a crank figure.",
+      healthy: "About 0.15 for a rear-drive automatic, around 0.21 for all-wheel drive. Manuals are usually a little lower.",
+      tip: "Changing this moves the crank number and nothing else — wheel horsepower, the honest measurement, is untouched. Don't tune it to make the total look nicer.",
+    },
+    rotatingFactor: {
+      title: "Rotating-mass factor",
+      what: "An allowance for the fact that the engine also has to spin up wheels, tyres, brake discs and driveshafts — not just push the car forward. Applied as a multiplier on the inertial term.",
+      healthy: "Typically 1.05 to 1.15. The 330i preset uses 1.09.",
+      tip: "Heavy wheels and tyres push it up. It's a small effect next to weight — leave it alone unless you're chasing the last couple of percent.",
+    },
+    finalDrive: {
+      title: "Final drive ratio",
+      what: "The differential's gear ratio, used with the gearbox ratio to turn engine RPM into road speed.",
+      healthy: "Stamped on the diff or in the spec sheet — 3.154 on a G20 330i.",
+      tip: "Only matters when the log has no speed channel. If yours logs speed, the tool calibrates itself from that and mostly ignores this.",
+    },
+    tireCircM: {
+      title: "Tyre rolling circumference",
+      what: "How far the car travels in one wheel rotation, in metres. Converts RPM to road speed, and underpins the wheel-slip cross-check.",
+      healthy: "About 2.02 m for a 225/45R18. It's roughly 2.5% less than the tyre's geometric size, because a loaded tyre squashes.",
+      tip: "Update it if you change wheel or tyre size — otherwise the speed and slip figures drift.",
+    },
+    cd: {
+      title: "Drag coefficient (Cd)",
+      what: "How cleanly the car slips through air. Feeds the aerodynamic drag the engine has to overcome, which grows with the square of speed.",
+      healthy: "0.26 for a G20 3-series. Most modern saloons sit between 0.25 and 0.32.",
+      tip: "Barely matters below about 60 mph, and matters a lot above 100. Roof boxes and open windows make it worse.",
+    },
+    frontalAreaM2: {
+      title: "Frontal area",
+      what: "The size of the hole the car punches through the air, in square metres. Multiplied by Cd for the drag term.",
+      healthy: "Around 2.19 m² for a 3-series. Roughly the car's width times its height, times about 0.85.",
+      tip: "Same story as Cd — only a high-speed effect. Leave it at the preset unless the car is lifted or lowered a lot.",
+    },
+    crr: {
+      title: "Rolling resistance (Crr)",
+      what: "How much the tyres resist rolling, as a fraction of the car's weight. A small, roughly constant drag that's always present.",
+      healthy: "About 0.012 for a performance road tyre on tarmac. Softer or underinflated tyres are higher.",
+      tip: "The smallest term in the calculation. Correct tyre pressures matter more for grip than they do for this number.",
+    },
+    airDensity: {
+      title: "Air density",
+      what: "How thick the air is, in kg per cubic metre. Scales aerodynamic drag, and it's also why the same car makes different power on different days.",
+      healthy: "1.2 kg/m³ at about 20°C at sea level. Hot days and altitude both reduce it.",
+      tip: "Set it lower if you're logging somewhere high or very hot. It's a small correction for the drag term here — the bigger real-world effect is on the engine itself.",
+    },
+
+    /* ---------------- concepts ---------------- */
+    virtualDyno: {
+      title: "How this works",
+      what: "There's no rolling road involved. The tool uses physics: your engine had to accelerate a known mass and overcome aerodynamic and rolling drag, and it knows how quickly the car sped up. Force times speed is power.",
+      healthy: "Expect to land within a few percent of a chassis dyno once the car specs are right.",
+      tip: "Treat these as estimates with consistent units, not certified figures. They're at their best comparing your own runs against each other.",
+    },
+    pullKinds: {
+      title: "What counts as a pull",
+      what: "A dyno pull is one uninterrupted wide-open run in a single gear. The tool finds these automatically, cuts them at gear changes, and rejects rev flares where the car didn't actually speed up — a kickdown, or a slipping converter.",
+      healthy: "Third or fourth gear, flat throttle from about 2000 rpm to redline, no shifts and no lifts.",
+      tip: "If no wide-open run exists, the tool falls back to the best part-throttle climb and says so — those figures are a floor, not your car's peak.",
+    },
+    makingPower: {
+      title: "How to actually gain power",
+      what: "In rough order of how much they matter on a JB4 car: a higher map (more boost), better fuel or a higher ethanol blend, cooler intake air, and then hardware — intake, intercooler, downpipe, turbo.",
+      healthy: "A healthy gain shows up as more boost held steadily, timing that stays put, and AFR that stays rich. All three at once means the car is happy with it.",
+      tip: "Go up one map at a time and log each. If more boost brings timing corrections, lean spots or just more wheelspin, you've found the limit — the next map up will be slower in the real world, not faster.",
+    },
+  };
+
+  const icon = (key) =>
+    HELP[key] ? `<button type="button" class="help-btn" data-help="${key}" aria-expanded="false" aria-label="Explain: ${HELP[key].title}">?</button>` : "";
+
+  function bubbleFor(key) {
+    const h = HELP[key];
+    const bub = document.createElement("div");
+    bub.className = "help-bubble";
+    bub.dataset.key = key;
+    bub.innerHTML =
+      `<strong>${h.title}</strong><p>${h.what}</p>` +
+      (h.healthy ? `<p><span class="help-tag good">Healthy</span>${h.healthy}</p>` : "") +
+      (h.tip ? `<p><span class="help-tag">What to do</span>${h.tip}</p>` : "");
+    return bub;
+  }
+
+  // One delegated listener for the whole page: help buttons come and go with
+  // every re-render, so binding them individually would leak handlers.
+  function install() {
+    document.addEventListener("click", (e) => {
+      const btn = e.target.closest(".help-btn");
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const host = btn.closest(".help-host") || btn.parentElement;
+      const key = btn.dataset.help;
+      if (!HELP[key]) return;
+      // A host can serve several buttons (the KPI row shares one), so an open
+      // bubble for a different field switches rather than just closing.
+      const open = host.querySelector(":scope > .help-bubble");
+      if (open) {
+        const sameField = open.dataset.key === key;
+        open.remove();
+        host.querySelectorAll(".help-btn[aria-expanded='true']").forEach((b) => b.setAttribute("aria-expanded", "false"));
+        if (sameField) return;
+      }
+      host.appendChild(bubbleFor(key));
+      btn.setAttribute("aria-expanded", "true");
+    });
+  }
+
+  return { HELP, icon, install };
+})();
+
+if (typeof module !== "undefined" && module.exports) module.exports = Help;
 
 
 /* ===== src/jb4/js/sample.js ===== */
@@ -1596,8 +1835,13 @@ const JB4Charts = (() => {
     const sp = spec();
     const overlay = el("div", "modal-overlay");
     const presetOpts = Object.entries(CAR_SPECS.PRESETS).map(([k, v]) => `<option value="${k}" ${k === specState.preset ? "selected" : ""}>${v.label}</option>`).join("");
+    // Show values at the precision the field actually steps in — the computed
+    // tyre circumference is otherwise 2.020695956733857, which reads like a
+    // number you're not allowed to touch.
+    const dp = (step) => (String(step).includes(".") ? String(step).split(".")[1].length : 0);
     const fieldHtml = SPEC_FIELDS.map(([k, label, step]) =>
-      `<label class="fld"><span>${label}</span><input data-k="${k}" type="number" step="${step}" value="${sp[k]}"></label>`).join("");
+      `<div class="fld help-host"><label><span>${label}${Help.icon(k)}</span>` +
+      `<input data-k="${k}" type="number" step="${step}" value="${Number(sp[k]).toFixed(dp(step))}"></label></div>`).join("");
     overlay.innerHTML = `<div class="modal">
       <div class="modal-head"><h3>Car specs</h3><button class="icon-btn" id="mClose">✕</button></div>
       <div class="modal-body">
@@ -1684,13 +1928,15 @@ const JB4Charts = (() => {
     const note = partial ? " · part-throttle, not a max-power run" : "";
 
     // KPI row
-    const kpis = el("div", "kpi-row");
-    const kpi = (val, unit, label, sub) => `<div class="kpi"><div class="kpi-value">${val}<span class="u"> ${unit}</span></div><div class="kpi-label">${label}</div>${sub ? `<div class="kpi-sub">${sub}</div>` : ""}</div>`;
+    // The row, not each tile, is the help host: a tile is only ~190px wide on a
+    // phone, so the bubble is appended across the full row instead.
+    const kpis = el("div", "kpi-row help-host");
+    const kpi = (val, unit, label, sub, help) => `<div class="kpi"><div class="kpi-value">${val}<span class="u"> ${unit}</span></div><div class="kpi-label">${label}${Help.icon(help)}</div>${sub ? `<div class="kpi-sub">${sub}</div>` : ""}</div>`;
     kpis.innerHTML =
-      kpi(fmt(d.peakWhp.value), "whp", partial ? "Wheel HP (best seen)" : "Peak wheel HP", `@ ${fmt(d.peakWhp.rpm)} rpm${note}`) +
-      kpi(fmt(d.peakEhp.value), "hp", partial ? "Crank HP (best seen)" : "Peak crank HP", `est. at engine`) +
-      kpi(fmt(d.peakTqEngine.value), "lb-ft", partial ? "Torque (best seen)" : "Peak torque", `@ ${fmt(d.peakTqEngine.rpm)} rpm`) +
-      kpi(d.hasMeasuredSpeed ? fmt(d.maxSlip) : "—", "%", "Max wheel slip", d.hasMeasuredSpeed ? "vs measured speed" : "no speed channel");
+      kpi(fmt(d.peakWhp.value), "whp", partial ? "Wheel HP (best seen)" : "Peak wheel HP", `@ ${fmt(d.peakWhp.rpm)} rpm${note}`, "peakWhp") +
+      kpi(fmt(d.peakEhp.value), "hp", partial ? "Crank HP (best seen)" : "Peak crank HP", `est. at engine`, "peakEhp") +
+      kpi(fmt(d.peakTqEngine.value), "lb-ft", partial ? "Torque (best seen)" : "Peak torque", `@ ${fmt(d.peakTqEngine.rpm)} rpm`, "peakTq") +
+      kpi(d.hasMeasuredSpeed ? fmt(d.maxSlip) : "—", "%", "Max wheel slip", d.hasMeasuredSpeed ? "vs measured speed" : "no speed channel", "maxSlip");
     sec.appendChild(kpis);
 
     if (partial) sec.appendChild(renderPartialBanner(s));
@@ -1701,12 +1947,12 @@ const JB4Charts = (() => {
 
     // chart cards
     const grid = el("div", "chart-grid");
-    grid.appendChild(chartCard("HP · engine vs wheel", "cHp", "Horsepower at the crank and at the wheels across the rev range."));
-    grid.appendChild(chartCard("Torque · engine vs wheel", "cTq", "Torque (lb-ft). Torque × RPM ÷ 5252 = HP."));
-    if (s.rec.fields.boost) grid.appendChild(chartCard("Boost vs target", "cBoost", "Actual boost against the JB4's own target. Gaps mean a leak or boost control issue."));
-    if (s.rec.fields.avgIgn) grid.appendChild(chartCard("Ignition timing", "cIgn", "Average advance. Sharp drops under boost can mean knock correction."));
-    if (s.rec.fields.afr) grid.appendChild(chartCard("Air/fuel ratio", "cAfr", "Lower = richer (safer under boost). Leaner than ~12.8 at WOT is worth watching."));
-    if (d.hasMeasuredSpeed) grid.appendChild(chartCard("Wheel slip", "cSlip", "How much faster the wheels spun than the car actually moved."));
+    grid.appendChild(chartCard("HP · engine vs wheel", "cHp", "Horsepower at the crank and at the wheels across the rev range.", "peakWhp"));
+    grid.appendChild(chartCard("Torque · engine vs wheel", "cTq", "Torque (lb-ft). Torque × RPM ÷ 5252 = HP.", "peakTq"));
+    if (s.rec.fields.boost) grid.appendChild(chartCard("Boost vs target", "cBoost", "Actual boost against the JB4's own target. Gaps mean a leak or boost control issue.", "boostVsTarget"));
+    if (s.rec.fields.avgIgn) grid.appendChild(chartCard("Ignition timing", "cIgn", "Average advance. Sharp drops under boost can mean knock correction.", "timing"));
+    if (s.rec.fields.afr) grid.appendChild(chartCard("Air/fuel ratio", "cAfr", "Lower = richer (safer under boost). Leaner than ~12.8 at WOT is worth watching.", "afr"));
+    if (d.hasMeasuredSpeed) grid.appendChild(chartCard("Wheel slip", "cSlip", "How much faster the wheels spun than the car actually moved.", "maxSlip"));
     sec.appendChild(grid);
 
     // GPS track map
@@ -1717,6 +1963,7 @@ const JB4Charts = (() => {
     }
 
     sec.appendChild(renderTimeline(s));
+    sec.appendChild(renderGuide());
 
     // recommendations
     const rec = el("div", "panel recs");
@@ -1773,7 +2020,7 @@ const JB4Charts = (() => {
     sec.appendChild(head);
 
     const grid = el("div", "chart-grid");
-    OVERVIEW_CHARTS.forEach((c) => { if (overviewSeries(r, c)) grid.appendChild(chartCard(c.title, c.id, c.sub)); });
+    OVERVIEW_CHARTS.forEach((c) => { if (overviewSeries(r, c)) grid.appendChild(chartCard(c.title, c.id, c.sub, c.help)); });
     sec.appendChild(grid);
 
     if (s.gps) {
@@ -1805,19 +2052,19 @@ const JB4Charts = (() => {
     const grid = el("div", "chart-grid");
     TIMELINE_CHARTS.forEach((c) => {
       if (c.id === "tMap" && !multiMap) return; // only interesting when it changes
-      if (overviewSeries(r, c)) grid.appendChild(chartCard(c.title, c.id, c.sub));
+      if (overviewSeries(r, c)) grid.appendChild(chartCard(c.title, c.id, c.sub, c.help));
     });
     sec.appendChild(grid);
     return sec;
   }
 
   const TIMELINE_CHARTS = [
-    { fields: ["rpm"], id: "tRpm", title: "RPM & pulls over time", sub: "Whole session; each detected pull highlighted.", color: "#94a3b8", pulls: true },
-    { fields: ["iat"], id: "tIat", title: "Intake air temp over time", sub: "Heat soak — if this climbs pull after pull, later runs lose power.", color: "#dc2626" },
-    { fields: ["boost"], id: "tBoost", title: "Boost over time", sub: "Boost consistency across the session.", color: "#2563eb", also: "boostTarget" },
-    { fields: ["pedal"], id: "tPedal", title: "Pedal vs throttle over time", sub: "Driver demand against throttle-plate angle. On a boosted car the plate stays part-closed at full pedal.", color: "#7c3aed", also: "throttle" },
-    { fields: ["afr"], id: "tAfr", title: "AFR over time", sub: "Lower = richer.", color: "#059669" },
-    { fields: ["avgIgn"], id: "tIgn", title: "Ignition timing over time", sub: "Average advance across the session.", color: "#d97706" },
+    { fields: ["rpm"], id: "tRpm", title: "RPM & pulls over time", sub: "Whole session; each detected pull highlighted.", color: "#94a3b8", pulls: true, help: "pullKinds" },
+    { fields: ["iat"], id: "tIat", title: "Intake air temp over time", sub: "Heat soak — if this climbs pull after pull, later runs lose power.", color: "#dc2626", help: "iat" },
+    { fields: ["boost"], id: "tBoost", title: "Boost over time", sub: "Boost consistency across the session.", color: "#2563eb", also: "boostTarget", help: "boostVsTarget" },
+    { fields: ["pedal"], id: "tPedal", title: "Pedal vs throttle over time", sub: "Driver demand against throttle-plate angle. On a boosted car the plate stays part-closed at full pedal.", color: "#7c3aed", also: "throttle", help: "pullKinds" },
+    { fields: ["afr"], id: "tAfr", title: "AFR over time", sub: "Lower = richer.", color: "#059669", help: "afr" },
+    { fields: ["avgIgn"], id: "tIgn", title: "Ignition timing over time", sub: "Average advance across the session.", color: "#d97706", help: "timing" },
     { fields: ["jb4Map"], id: "tMap", title: "JB4 map over time", sub: "Which map was running when.", color: "#0891b2" },
   ];
 
@@ -1825,20 +2072,49 @@ const JB4Charts = (() => {
   // lists the channels it can use, in preference order.
   const OVERVIEW_CHARTS = [
     { fields: ["rpm"], id: "oRpm", title: "RPM over time", sub: "The whole log. A pull looks like a steep, uninterrupted climb.", color: "#2563eb" },
-    { fields: ["throttle", "pedal"], id: "oThr", title: "Throttle over time", sub: "Wide open is ~80–100%. The dyno looks for sustained high throttle.", color: "#7c3aed" },
+    { fields: ["throttle", "pedal"], id: "oThr", title: "Throttle over time", sub: "Wide open is ~80–100%. The dyno looks for sustained high throttle.", color: "#7c3aed", help: "pullKinds" },
     { fields: ["boost"], id: "oBoost", title: "Boost over time", sub: "Charge pressure across the log.", color: "#059669" },
     { fields: ["mph"], id: "oMph", title: "Speed over time", sub: "Measured speed channel.", color: "#d97706" },
-    { fields: ["avgIgn"], id: "oIgn", title: "Ignition timing over time", sub: "Average advance.", color: "#dc2626" },
-    { fields: ["afr"], id: "oAfr", title: "AFR over time", sub: "Lower = richer.", color: "#0891b2" },
+    { fields: ["avgIgn"], id: "oIgn", title: "Ignition timing over time", sub: "Average advance.", color: "#dc2626", help: "timing" },
+    { fields: ["afr"], id: "oAfr", title: "AFR over time", sub: "Lower = richer.", color: "#0891b2", help: "afr" },
   ];
   const overviewSeries = (rec, c) => { for (const f of c.fields) if (rec.fields[f]) return rec.fields[f]; return null; };
+
+  // A collapsed cheat-sheet: is my car healthy, and how do I go faster. The
+  // numbers here are the same ones analyze.js tests against, so the guide and
+  // the findings above it can't drift apart.
+  function renderGuide() {
+    const d = el("details", "panel guide");
+    d.innerHTML = `<summary><strong>What do these numbers mean?</strong> — health ranges and how to gain power</summary>
+      <div class="guide-body">
+        <h4>Is the car healthy?</h4>
+        <table class="data-table guide-table"><thead><tr><th>What</th><th>Healthy</th><th>If it's not</th></tr></thead><tbody>
+          <tr><td class="name">Boost vs target</td><td>within ~1.5 psi</td><td>Leak, loose charge pipe, tired wastegate, or fuelling limits. Smoke-test it.</td></tr>
+          <tr><td class="name">Ignition timing</td><td>steady; drops under 3°</td><td>Knock correction — low octane, hot intake air, or too aggressive a map.</td></tr>
+          <tr><td class="name">AFR at full throttle</td><td>richer than 12.8 (12.0 on E30+)</td><td>Lean under boost is the expensive one. Check fuel pressure and pump before another pull.</td></tr>
+          <tr><td class="name">Intake air temp</td><td>below 50°C / 122°F</td><td>Heat soak. Let it cool between runs; back-to-back pulls always fade.</td></tr>
+          <tr><td class="name">Wheel slip</td><td>under 8%</td><td>Power going to smoke. Higher gear, roll in above ~40 mph, or drop a map.</td></tr>
+        </tbody></table>
+        <h4>How to actually gain power</h4>
+        <ol class="guide-list">
+          <li><strong>A higher JB4 map</strong> — more boost, the biggest single step. Go up one at a time and log each one.</li>
+          <li><strong>Better fuel</strong> — higher octane, or an ethanol blend if your setup supports it. Often worth more than the next map up.</li>
+          <li><strong>Cooler intake air</strong> — free power you already own. Watch the intake-temp graph across a session.</li>
+          <li><strong>Traction</strong> — if slip is high you're already past what the tyres will take; more boost won't make you faster.</li>
+          <li><strong>Hardware</strong> — intake, intercooler, downpipe, turbo. Only after the above are clean.</li>
+        </ol>
+        <p class="muted small">A gain is real when boost holds steadily, timing stays put and AFR stays rich — all three at once. If more boost brings timing corrections, lean spots or just wheelspin, you've found the limit and the next map up will be slower in the real world.</p>
+        <div class="muted small help-host">Every number here is an estimate from your log, not a certified dyno figure. They're at their most useful comparing your own runs against each other. ${Help.icon("virtualDyno")}</div>
+      </div>`;
+    return d;
+  }
 
   function fndClass(l) { return l === "bad" ? "bad" : l === "warn" ? "warn" : l === "good" ? "good" : "info"; }
   function icon(l) { return l === "bad" ? "⛔" : l === "warn" ? "⚠️" : l === "good" ? "✅" : "ℹ️"; }
 
-  function chartCard(title, id, sub) {
+  function chartCard(title, id, sub, help) {
     const c = el("div", "card");
-    c.innerHTML = `<div class="card-head"><h3>${title}</h3></div><div class="canvas-wrap"><canvas id="${id}"></canvas></div>${sub ? `<div class="card-foot muted">${sub}</div>` : ""}`;
+    c.innerHTML = `<div class="card-head help-host"><h3>${title}${help ? Help.icon(help) : ""}</h3></div><div class="canvas-wrap"><canvas id="${id}"></canvas></div>${sub ? `<div class="card-foot muted">${sub}</div>` : ""}`;
     return c;
   }
 
@@ -1979,6 +2255,7 @@ const JB4Charts = (() => {
      INIT
      ========================================================= */
   initTheme();
+  Help.install();
   render();
 })();
 

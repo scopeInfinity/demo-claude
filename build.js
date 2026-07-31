@@ -66,6 +66,7 @@ const PROJECTS = [
     js: [
       "src/jb4/js/chart.umd.min.js", // Chart.js first (defines window.Chart)
       "src/jb4/js/carspecs.js",
+      "src/jb4/js/help.js",
       "src/jb4/js/sample.js",
       "src/jb4/js/parse.js",
       "src/jb4/js/dyno.js",

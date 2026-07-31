@@ -123,6 +123,44 @@ code { background: var(--panel-2); border: 1px solid var(--border); border-radiu
 .map-wrap { height: 300px; }
 .chart-offline { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--fg-soft); }
 
+/* ---------- Help tips ---------- */
+.help-host { position: relative; }
+.help-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; margin-left: 6px; padding: 0; vertical-align: middle;
+  border: 1px solid var(--border); border-radius: 50%; background: var(--panel-2);
+  color: var(--fg-soft); font-size: 11px; font-weight: 700; line-height: 1;
+  cursor: pointer; flex: none;
+}
+.help-btn:hover, .help-btn:focus-visible { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
+.help-btn[aria-expanded="true"] { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
+.help-bubble {
+  margin-top: 8px; padding: 10px 12px; border-radius: 8px;
+  background: var(--panel-2); border: 1px solid var(--border); border-left: 3px solid var(--primary);
+  font-size: 12.5px; line-height: 1.5; font-weight: 400; text-transform: none; letter-spacing: 0;
+  color: var(--fg); white-space: normal;
+}
+.help-bubble strong { display: block; margin-bottom: 4px; font-size: 13px; }
+.help-bubble p { margin: 6px 0 0; color: var(--fg-soft); }
+.help-tag {
+  display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 4px;
+  background: var(--border); color: var(--fg); font-size: 10.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .03em;
+}
+.help-tag.good { background: var(--good); color: #fff; }
+/* The KPI row is a grid — let its bubble span every column so it stays legible
+   on a phone, where each tile is only ~190px wide. */
+.kpi-row > .help-bubble { grid-column: 1 / -1; margin-top: 0; }
+
+/* ---------- Guide ("what do these numbers mean") ---------- */
+.guide summary { cursor: pointer; font-size: 13.5px; }
+.guide summary strong { color: var(--fg); }
+.guide-body h4 { margin: 16px 0 8px; font-size: 13px; }
+.guide-table td { text-align: left; white-space: normal; }
+.guide-table td.name { font-weight: 600; }
+.guide-list { margin: 0; padding-left: 20px; font-size: 13px; }
+.guide-list li { margin-bottom: 5px; }
+
 /* ---------- Session timeline ---------- */
 .timeline .chart-grid { margin-top: 12px; }
 .timeline p { margin: 0; }

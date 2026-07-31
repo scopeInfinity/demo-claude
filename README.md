@@ -41,6 +41,11 @@ more power on a higher map, and am I just spinning the tyres?*
   changes (a shift drops the revs while the car keeps accelerating), and climbs
   where the revs flare without the car speeding up — kickdowns, converter or
   clutch slip — are rejected rather than scored as enormous power.
+- **Explains itself.** Every headline number, chart and car-spec field has a
+  "?" that says what it is, what a healthy car looks like, and what to do about
+  it — plus a guide covering health ranges and how to actually gain power.
+  Thresholds in the help are the same ones the analysis tests against, so
+  advice and findings can't disagree.
 - **Session timeline.** The whole log against time with each pull picked out,
   so you can see intake temps, boost and timing across the session rather than
   only within one pull. Splits by JB4 map when the log records one.
@@ -163,7 +168,7 @@ build.js                       # bundles src/ -> the index.html files
 src/
   home/       body.html, style.css
   hospital/   body.html, css/, js/          (scoring, insights, charts, store, app)
-  jb4/        body.html, css/, js/          (carspecs, parse, dyno, analyze, charts, app, sample)
+  jb4/        body.html, css/, js/          (carspecs, help, parse, dyno, analyze, charts, app, sample)
 ```
 
 Edit the files under `src/`, then rebuild:
